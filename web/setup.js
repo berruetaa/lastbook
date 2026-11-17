@@ -5,6 +5,10 @@
 (() => {
   const $ = s => document.querySelector(s);
   const main = $('#main'), live = $('#live');
+  function setMain(html) {
+    main.innerHTML = html;
+    LastbookI18n.apply(main);
+  }
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const WIN = document.documentElement.classList.contains('plat-win');
   const UNIT = WIN ? 1024 : 1000;   // each system's own way of counting a gigabyte, so the numbers match Finder or Explorer
@@ -149,7 +153,7 @@
 
   async function load() {
     try { S = await call('state') }
-    catch (e) { main.innerHTML = `<div class="s-err" role="alert">${ico('warn')}<div><b>Setup could not start.</b><p>${esc(e.message)}</p><p><button class="btn" id="again">Try again</button></p></div></div>`; $('#again').onclick = load; return }
+    catch (e) { setMain(`<div class="s-err" role="alert">${ico('warn')}<div><b>Setup could not start.</b><p>${esc(e.message)}</p><p><button class="btn" id="again">Try again</button></p></div></div>`); $('#again').onclick = load; return }
     const rf = (S.recommend || {}).folder;
     folder = folder || (cur() && cur().folder) || S.default_folder || (rf ? asData(rf) : '');
     if (!choice.pack) {
@@ -225,9 +229,9 @@
       : f.size_ok === false ? '' : `<div class="s-found">${ico(f.kind === 'library' ? 'folder' : 'file')}<span><b>${esc(f.kind === 'library' ? 'A Lastbook library' : f.kind === 'model' ? 'The local AI file' : (packById(f.id) ? packById(f.id).title + ' library' : f.title || f.name))}</b><small>${esc(home(f.path))}${f.size ? ' · ' + size(f.size) : ''}</small></span>
         <button class="btn plain" data-use="${i}">Use the file you already have</button></div>`).join('');
 
-    main.innerHTML = `${c ? `<button class="s-link" id="toManage">${ico('back')}<span>Library and local AI</span></button>` : ''}
-      <h1>${c ? 'Change the library' : 'Set up Lastbook'}</h1>
-      ${c ? '' : '<p class="lead">Choose your state and library. Lastbook downloads them for offline use.</p>'}
+    setMain(`${c ? `<button class="s-link" id="toManage">${ico('back')}<span>Library and local AI</span></button>` : ''}
+      ${c ? '<h1>Change the library</h1>' : '<h1 data-i18n="setup.title">Set up Lastbook</h1>'}
+      ${c ? '' : '<p class="lead" data-i18n="setup.chooseHint">Choose your state and library. Lastbook downloads them for offline use.</p>'}
       ${computer()}
       ${c ? '' : recommendLine()}
       ${found ? `<h2>Found on this computer</h2><div class="s-founds">${found}</div>` : ''}
@@ -238,10 +242,10 @@
       <section class="s-sum" id="sum" aria-live="polite"></section>
       <div class="s-go">
         <button class="btn big" id="start"></button>
-        ${c ? '' : '<button class="s-link" id="haveLib">Choose an existing library folder</button>'}
+        ${c ? '' : '<button class="s-link" id="haveLib" data-i18n="setup.chooseFolder">Choose an existing library folder</button>'}
         <button class="s-link" id="haveFile">Choose a library zip or AI model file</button>
       </div>
-      <p class="s-note" id="haveNote" hidden></p>`;
+      <p class="s-note" id="haveNote" hidden></p>`);
     main.querySelectorAll('input[name=pack]').forEach(r => r.onchange = () => { choice.pack = r.value; shortfall = null; mapSection(); summary() });
     const box = $('#aiBox'); if (box && !box.disabled) box.onchange = () => { choice.ai = box.checked; shortfall = null; summary() };
     main.querySelectorAll('[data-use]').forEach(b => b.onclick = () => useFile((S.found || [])[+b.dataset.use].path, b));
@@ -355,7 +359,7 @@
     const o = [].concat(c.old || [])[0], old = o ? (typeof o === 'string' ? { path: o } : o) : null;   // the engine lists the paths it moved aside
     const larger = packs().filter(x => (x.installed_bytes || 0) > ((p && p.installed_bytes) || 0));
     const bigger = larger.filter(x => x.available !== false), later = larger.find(x => x.available === false);
-    main.innerHTML = `<h1>Library and local AI</h1>
+    setMain(`<h1>Library and local AI</h1>
       <div class="s-have">
         <div class="s-row">${ico('book', 's-ri')}<span><b>${esc(p ? p.title : c.pack || 'Library')} library</b><small>${libraryUpdate ? 'Updated edition available · ' : p ? size(p.installed_bytes) + ' · ' : ''}${esc(home(c.folder))}</small></span>
           ${libraryUpdate ? `<button class="btn" id="libraryUpdate">Update ${esc(p.title)}</button>` : bigger.length ? `<button class="btn" id="upgrade">${ico('up')}Get ${esc(bigger[0].title)}</button>` : later ? `<span class="s-badge later">${esc(later.title)} comes later</span>` : '<span class="s-badge here">The largest</span>'}</div>
@@ -368,7 +372,7 @@
       ${old ? `<div class="s-row s-old">${ico('folder', 's-ri')}<span><b>The old library is still here</b><small>${esc(home(old.path))}${old.bytes ? ' · ' + size(old.bytes) : ''}</small></span>${confirmOld ? `<span class="s-confirm"><span>Delete it for good?</span><button class="btn danger" id="oldYes">Delete</button><button class="btn plain" id="oldNo">Keep</button></span>` : `<button class="btn plain" id="rmOld">${ico('trash')}Delete it</button>`}</div>` : ''}
       ${computer()}
       ${CAN.repair ? `<div class="s-go left"><button class="btn plain" id="repair">${ico('repair')}Check and repair</button></div>` : ''}
-      <p class="s-note${noteOk ? ' ok' : ''}" id="haveNote"${note ? '' : ' hidden'}>${esc(note)}</p>`;
+      <p class="s-note${noteOk ? ' ok' : ''}" id="haveNote"${note ? '' : ' hidden'}>${esc(note)}</p>`);
     if ($('#libraryUpdate')) $('#libraryUpdate').onclick = () => { choice.pack = c.pack; choice.ai = !!c.model; go('choose') };
     if ($('#upgrade')) $('#upgrade').onclick = () => { choice.pack = bigger[0].id; choice.ai = !!c.model; go('choose') };
     if ($('#mapCh')) $('#mapCh').onclick = () => { choice.pack = c.pack; choice.ai = !!c.model; choice.map = null; go('choose'); const m = $('#mapSel'); if (m) m.focus() };
@@ -474,13 +478,13 @@
       const lead = quiet ? 'Stopped when Lastbook closed. Resume to finish; nothing needs downloading.'
         : j.state === 'paused' ? 'What is downloaded is kept. Resume when you are ready, even after closing Lastbook.'
         : j.state === 'failed' ? '' : 'You can keep using this computer. Closing Lastbook pauses it.';
-      main.innerHTML = `<h1>${head}</h1>${lead ? `<p class="lead">${lead}</p>` : ''}
+      setMain(`<h1>${head}</h1>${lead ? `<p class="lead">${lead}</p>` : ''}
         ${j.state === 'failed' ? errorBox(j) : ''}
         <div class="s-items">${j.items.map(it => itemHTML(it, j)).join('')}</div>
         ${j.state === 'failed' ? '' : `<div class="s-go left">${confirmCancel
           ? `<span class="s-confirm"><span>Stop and throw away the download?</span><button class="btn danger" data-act="cancel-yes">Stop</button><button class="btn plain" data-act="cancel-no">Keep going</button></span>`
           : `${j.state === 'paused' ? `<button class="btn" data-act="resume">${ico('play')}Resume</button>` : j.state === 'downloading' || j.state === 'waiting' ? `<button class="btn plain" data-act="pause">${ico('pause')}Pause</button>` : ''}
-             <button class="btn plain" data-act="cancel">${ico('x')}Cancel</button>`}</div>`}`;
+             <button class="btn plain" data-act="cancel">${ico('x')}Cancel</button>`}</div>`}`);
       main.querySelectorAll('[data-act]').forEach(b => b.onclick = () => jobAct(b.dataset.act, b));
       const again = had && main.querySelector(`[data-act="${had}"]`) || (had && main.querySelector('[data-act]'));
       if (again) again.focus();
@@ -519,10 +523,11 @@
   /* ---- done */
   function doneView() {
     const j = S.job || { items: [] }, fixed = repair && repair.fixed, checked = repair && !fixed;
-    const got = j.items.filter(i => i.id !== 'repair' && i.id !== 'library').map(i => esc(itemTitle(i))).join(', ').replace(/, ([^,]*)$/, ' and $1');
-    main.innerHTML = `<div class="s-done">${ico('ok', 's-big')}<h1>${checked ? 'All good' : fixed ? 'Repaired' : 'Ready'}</h1>
-      <p class="lead">${checked ? 'The library was checked and is complete.' : fixed ? 'A damaged part was downloaded again. The damaged copy is kept aside; you can delete it in Library and local AI.' : got ? `Installed: ${got}.` : 'The library is installed.'}</p>
-      <button class="btn big" id="open">Open the library</button><p class="s-note" id="openNote" hidden></p></div>`;
+    const got = j.items.filter(i => i.id !== 'repair' && i.id !== 'library').map(itemTitle).join(', ').replace(/, ([^,]*)$/, ' and $1');
+    setMain(`<div class="s-done">${ico('ok', 's-big')}<h1>${checked ? 'All good' : fixed ? 'Repaired' : 'Ready'}</h1>
+      <p class="lead">${checked ? 'The library was checked and is complete.' : fixed ? 'A damaged part was downloaded again. The damaged copy is kept aside; you can delete it in Library and local AI.' : got ? '' : 'The library is installed.'}</p>
+      <button class="btn big" id="open">Open the library</button><p class="s-note" id="openNote" hidden></p></div>`);
+    if (!checked && !fixed && got) main.querySelector('.lead').textContent = LastbookI18n.t('setup.installedItems', { items: got });
     live.textContent = checked ? 'The library was checked.' : 'Installed. Ready to open.';
     $('#open').onclick = async () => {
       const b = $('#open'); b.disabled = true; b.textContent = 'Opening your library…';
