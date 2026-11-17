@@ -30,8 +30,15 @@ test('setup translates marked labels and preserves unknown keys', () => {
   ]);
 });
 
+test('Spanish language tags share the es-419 catalogue', () => {
+  const expected = render('es-419');
+  for (const locale of ['es', 'es-UY', 'es-AR', 'es-CL', 'ES-mx']) {
+    assert.deepEqual(render(locale), expected);
+  }
+});
+
 test('absent and unsupported locales use English', () => {
-  for (const locale of [undefined, 'fr']) {
+  for (const locale of [undefined, 'fr', 'et-EE']) {
     assert.deepEqual(render(locale), [
       ['Set up Lastbook', 'en'], ['Back to the library', 'en'],
       ['Looking at this computer…', 'en'], ['Readable fallback', undefined],

@@ -14,7 +14,7 @@
   };
 
   // Keep the document in English while only parts of the interface are translated.
-  const useSpanish = (navigator.language || '').toLowerCase() === 'es-419';
+  const useSpanish = (navigator.language || '').split('-')[0].toLowerCase() === 'es';
   for (const node of document.querySelectorAll('[data-i18n]')) {
     const key = node.dataset.i18n;
     if (useSpanish && Object.prototype.hasOwnProperty.call(spanish, key)) {
