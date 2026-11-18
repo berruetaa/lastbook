@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
 <meta charset="utf-8">
 <title>Offline i18n DOM test</title>
 <script src="../../web/i18n-core.js"></script>
@@ -12,6 +12,12 @@
 <input data-i18n-placeholder="setup.search" value="user input">
 <svg><text data-i18n="setup.open"><tspan data-i18n="setup.open">Initial SVG text</tspan></text></svg>
 <p data-i18n="setup.ready" data-i18n-title="setup.ready"></p>
+<select name="selection">
+  <option data-i18n="setup.open" selected>Implicit value</option>
+  <option data-i18n="setup.open" value="stable">Stable choice</option>
+</select>
+<p id="author" data-i18n="setup.open" lang="fr" dir="auto">Existing explicit metadata</p>
+<p id="plural" data-i18n="setup.files">Initial plural text</p>
 <p id="missing" data-i18n="unknown.key">Existing copy</p>
 <p id="user">User-authored content</p>
 <pre id="result">PENDING</pre>
@@ -20,11 +26,14 @@
     const result = document.querySelector("#result");
     try {
       const catalogs = { ...i18nExampleCatalogs,
-        "es-419": { "setup.open": "Abrir biblioteca", "setup.ready": "Todo listo, {name}" } };
+        "es-419": { "setup.open": "Abrir biblioteca", "setup.ready": "Todo listo, {name}" },
+        ar: { "setup.open": "افتح المكتبة" } };
       const i18n = createI18n({ catalogs, locale: "es-UY", fallbackLocale: "en",
-        fallbacks: { "es-UY": ["es-419"] } });
+        regionFallbacks: { es: ["es-419"] } });
       const payload = '<img src=x onerror="window.injected=1">';
-      const paramsFor = () => ({ name: payload });
+      const paramsFor = () => ({ name: payload, count: 2 });
+      const author = document.querySelector("#author");
+      const select = document.querySelector("select");
       const button = document.querySelector("button");
       const svg = button.querySelector("svg");
       const path = svg.querySelector("path");
@@ -36,6 +45,28 @@
       function equal(actual, expected, label) {
         if (actual !== expected) throw new Error(label + " failed");
       }
+      let failed = false;
+      try {
+        applyI18n(document, i18n, () => null);
+      } catch (error) {
+        failed = error instanceof TypeError;
+      }
+      equal(failed, true, "missing count error");
+      equal(button.hasAttribute("aria-label"), false, "preflight avoided partial render");
+      equal(button.querySelector("span").textContent, "Initial button text", "preflight preserved text");
+
+      button.setAttribute("data-i18n-aria-label", "setup.search");
+      button.setAttribute("data-i18n-title", "setup.open");
+      failed = false;
+      try {
+        applyI18n(button, i18n, paramsFor);
+      } catch (error) {
+        failed = error instanceof RangeError;
+      }
+      equal(failed, true, "unrepresentable same-element language conflict");
+      equal(button.hasAttribute("title"), false, "conflict avoided partial render");
+      button.removeAttribute("data-i18n-title");
+      button.setAttribute("data-i18n-aria-label", "setup.open");
       applyI18n(button, i18n, paramsFor);
       equal(button.getAttribute("aria-label"), "Abrir biblioteca", "marked root");
       equal(input.hasAttribute("placeholder"), false, "scope");
@@ -48,6 +79,16 @@
       equal(tspan, document.querySelector("tspan"), "SVG tspan identity");
       equal(tspan.textContent, "Abrir biblioteca", "SVG leaf translated");
       equal(input.placeholder, "Search", "English fallback");
+      equal(input.getAttribute("lang"), "en", "English fallback metadata");
+      equal(button.getAttribute("lang"), "es-419", "Spanish attribute metadata");
+      equal(tspan.getAttribute("lang"), "es-419", "SVG language metadata");
+      equal(tspan.getAttribute("direction"), "ltr", "SVG direction metadata");
+      equal(author.lang, "fr", "explicit language preserved");
+      equal(author.dir, "auto", "explicit direction preserved");
+      equal(select.value, "Implicit value", "implicit option value and selection preserved");
+      equal(select.options[1].textContent, "Abrir biblioteca", "explicit value option translated");
+      select.selectedIndex = 1;
+      equal(select.value, "stable", "explicit form value preserved");
       equal(input.value, "user input", "user input preserved");
       equal(paragraph.textContent, "Todo listo, " + payload, "literal HTML");
       equal(paragraph.title, "Todo listo, " + payload, "literal attribute");
@@ -65,6 +106,22 @@
       applyI18n(document, i18n, paramsFor);
       equal(button.getAttribute("aria-label"), "Open library", "locale change");
       equal(svg, button.querySelector("svg"), "identity after locale change");
+      equal(button.lang, "en", "language updated");
+      equal(select.value, "stable", "selection preserved across locale change");
+      input.lang = "de";
+      i18n.setLocale("ar");
+      applyI18n(document, i18n, paramsFor);
+      equal(button.lang, "ar", "Arabic language updated");
+      equal(button.dir, "rtl", "HTML direction updated");
+      equal(tspan.getAttribute("direction"), "rtl", "SVG direction updated");
+      equal(input.lang, "de", "host-edited language retained");
+      paragraph.setAttribute("data-i18n", "missing");
+      paragraph.setAttribute("data-i18n-title", "missing");
+      applyI18n(paragraph, i18n, paramsFor);
+      equal(paragraph.textContent, "", "inactive original text restored");
+      equal(paragraph.hasAttribute("title"), false, "inactive original title restored");
+      equal(paragraph.hasAttribute("lang"), false, "inactive managed language removed");
+      equal(paragraph.hasAttribute("dir"), false, "inactive managed direction removed");
       result.textContent = "PASS";
     } catch (error) {
       result.textContent = "FAIL " + error.message;
