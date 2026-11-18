@@ -10,11 +10,15 @@
       "setup.title": "Set up Lastbook",
       "setup.back": "Back to the library",
       "setup.loading": "Looking at this computer…",
+      "setup.chooseIntro": "Choose your state and library. Lastbook downloads them for offline use.",
+      "setup.library": "Library",
     },
     "es-419": {
       "setup.title": "Configurar Lastbook",
       "setup.back": "Volver a la biblioteca",
       "setup.loading": "Revisando este equipo…",
+      "setup.chooseIntro": "Elige tu estado y biblioteca. Lastbook los descarga para usarlos sin conexión.",
+      "setup.library": "Biblioteca",
     },
   };
 });

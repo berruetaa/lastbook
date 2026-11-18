@@ -226,13 +226,13 @@
         <button class="btn plain" data-use="${i}">Use the file you already have</button></div>`).join('');
 
     main.innerHTML = `${c ? `<button class="s-link" id="toManage">${ico('back')}<span>Library and local AI</span></button>` : ''}
-      <h1>${c ? 'Change the library' : 'Set up Lastbook'}</h1>
-      ${c ? '' : '<p class="lead">Choose your state and library. Lastbook downloads them for offline use.</p>'}
+      <h1${c ? '' : ' data-i18n="setup.title"'}>${c ? 'Change the library' : 'Set up Lastbook'}</h1>
+      ${c ? '' : '<p class="lead" data-i18n="setup.chooseIntro">Choose your state and library. Lastbook downloads them for offline use.</p>'}
       ${computer()}
       ${c ? '' : recommendLine()}
       ${found ? `<h2>Found on this computer</h2><div class="s-founds">${found}</div>` : ''}
       <section id="mapBox" class="s-map-panel" aria-label="Your local map"></section>
-      <h2 id="packH">Library</h2>
+      <h2 id="packH" data-i18n="setup.library">Library</h2>
       <div class="s-opts" role="radiogroup" aria-labelledby="packH">${packCards}</div>
       ${ai ? `<h2>Local AI</h2>${ai}` : ''}
       <section class="s-sum" id="sum" aria-live="polite"></section>
@@ -251,6 +251,7 @@
     $('#haveFile').onclick = () => haveLibrary(true);
     mapSection();
     summary();
+    globalThis.LastbookI18n?.apply(main);
   }
   /* Map geometry and address indexes are separate downloads, chosen by state. */
   function mapSection() {

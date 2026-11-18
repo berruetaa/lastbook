@@ -121,10 +121,68 @@ test("plural grammar and count formatting agree for fractional quantities", () =
   assert.equal(translator("en").t("files", { count: 1.0004 }), "1 file");
   assert.equal(translator("en").t("files", { count: 1.001 }), "1.001 files");
   assert.equal(translator("es-UY").t("files", { count: 1.001 }),
-    new Intl.NumberFormat("es-419").format(1.001) + " archivos");
+    new Intl.NumberFormat("es-UY").format(1.001) + " archivos");
   for (const count of [NaN, Infinity, "2", undefined]) {
     assert.throws(() => translator("en").t("files", { count }), TypeError);
   }
+});
+
+test("explicit routes to the default never hide later supported preferences", () => {
+  const i18n = createI18n({ catalogs, fallbacks: { fr: ["en"], es: ["es-419"] } });
+  assert.equal(i18n.chooseLocale(["fr", "es"]), "es");
+  assert.equal(i18n.chooseLocale(["fr-CA", "es-UY"]), "es-UY");
+  assert.equal(i18n.chooseLocale(["en-US", "es"]), "en-US");
+  assert.equal(i18n.chooseLocale(["en", "es"]), "en");
+  assert.equal(i18n.chooseLocale(["fr"]), "en");
+});
+
+test("plural grammar follows the message while count respects selected numbering", () => {
+  const spanish = translator("es-UY-u-nu-arab");
+  assert.equal(spanish.t("files", { count: 1.0004 }),
+    new Intl.NumberFormat(spanish.locale).format(1.0004) + " archivo");
+  assert.equal(spanish.t("files", { count: 2.001 }),
+    new Intl.NumberFormat(spanish.locale).format(2.001) + " archivos");
+  const en = { quantity: { one: "one {count}", other: "other {count}" } };
+  const i18n = createI18n({ locale: "fa-IR-u-nu-latn", catalogs: { en, fa: en } });
+  assert.equal(i18n.t("quantity", { count: 0 }), "one \u20680\u2069"); // Persian zero is one
+  assert.equal(i18n.t("quantity", { count: 1.0004 }), "one \u20681\u2069");
+  assert.equal(i18n.t("quantity", { count: 2.125 }), "other \u20682.125\u2069");
+  i18n.setLocale("ja-JP-u-nu-fullwide"); // English fallback still uses English grammar
+  assert.equal(i18n.t("quantity", { count: 1 }), "one １");
+});
+
+test("exact plural integers reject unsafe precision and cover the safe boundary", () => {
+  for (const form of ["=1000000000000000000000", "=9007199254740992", "=9007199254740993", "=1e21", "=-1", "=1.5", "=01"]) {
+    assert.throws(() => createI18n({ catalogs: { en: { n: { [form]: "exact", other: "other" } } } }), TypeError);
+  }
+  const i18n = createI18n({ catalogs: { en: { n: {
+    "=9007199254740991": "exact", "=0": "zero", other: "other {count}",
+  } } } });
+  assert.equal(i18n.t("n", { count: Number.MAX_SAFE_INTEGER }), "exact");
+  assert.equal(i18n.t("n", { count: -0 }), "zero");
+  assert.match(i18n.t("n", { count: 1e21 }), /^other /);
+});
+
+test("Arabic plural categories, script direction and bidi isolation", () => {
+  const forms = Object.fromEntries(["zero", "one", "two", "few", "many", "other"].map(form => [form, form + " {count}"]));
+  const i18n = createI18n({ locale: "ar", catalogs: { en: { greeting: "Hello {name}", n: forms, fallback: "English" }, ar: { greeting: "مرحبا {name}", n: forms } } });
+  for (const [count, form] of [[0, "zero"], [1, "one"], [2, "two"], [3, "few"], [11, "many"], [100, "other"], [1.5, "other"]]) {
+    assert.equal(i18n.t("n", { count }), form + " \u2068" + new Intl.NumberFormat("ar").format(count) + "\u2069");
+  }
+  assert.equal(i18n.t("greeting", { name: "Ana / file.txt" }), "مرحبا \u2068Ana / file.txt\u2069");
+  for (const tag of ["ar", "fa", "he", "az-Arab", "en-Arab"]) assert.equal(i18n.direction(tag), "rtl");
+  for (const tag of ["en", "es-UY", "az-Latn", "ar-Latn"]) assert.equal(i18n.direction(tag), "ltr");
+  const arabic = new FakeElement({ "data-i18n": "greeting" });
+  const english = new FakeElement({ "data-i18n": "fallback", dir: "rtl" });
+  const untouched = new FakeElement({}, "Unmarked English");
+  const container = new FakeElement({ "data-i18n-aria-label": "greeting" }, "", [untouched]);
+  applyI18n(new FakeElement({}, "", [arabic, english, container]), i18n, () => ({ name: "Ana" }));
+  assert.equal(arabic.getAttribute("dir"), "rtl");
+  assert.equal(english.getAttribute("dir"), "ltr");
+  assert.equal(english.getAttribute("lang"), "en");
+  assert.equal(container.getAttribute("dir"), null);
+  assert.equal(container.getAttribute("lang"), null);
+  assert.equal(untouched.textContent, "Unmarked English");
 });
 
 test("catalogs have explicit contracts and reject accessors or unexpected shapes", () => {
@@ -215,4 +273,155 @@ test("DOM adapter updates only opted-in leaf text and safe attributes", () => {
   applyI18n(leaf, i18n, paramsFor);
   assert.equal(leaf.textContent, "Hello, Ana");
   assert.equal(leaf.getAttribute("lang"), "en");
+});
+
+test("parameter providers survive reapply, stay per engine/element/key and can be cleared", () => {
+  const first = translator("en"), second = translator("en");
+  const leaf = new FakeElement({ "data-i18n": "greeting" });
+  const root = new FakeElement({}, "", [leaf]);
+  let name = "Ana";
+  applyI18n(root, first, () => ({ name }));
+  name = "Bea";
+  first.setLocale("es-UY");
+  applyI18n(root, first);
+  assert.equal(leaf.textContent, "Hola, Bea");
+  applyI18n(leaf, second);
+  assert.equal(leaf.textContent, "Hello, {name}");
+  applyI18n(root, first, () => ({ name: "New" }));
+  assert.equal(leaf.textContent, "Hola, New");
+  applyI18n(root, first, null);
+  assert.equal(leaf.textContent, "Hola, {name}");
+  const fresh = new FakeElement({ "data-i18n": "greeting" });
+  root.children = [fresh];
+  applyI18n(root, first);
+  assert.equal(fresh.textContent, "Hola, {name}");
+  assert.throws(() => applyI18n(root, first, {}), TypeError);
+});
+
+test("narrow provider updates preserve siblings and marker changes release old bindings", () => {
+  const first = new FakeElement({ "data-i18n": "greeting" });
+  const second = new FakeElement({ "data-i18n": "greeting" });
+  const root = new FakeElement({}, "", [first, second]);
+  const i18n = translator("en");
+  applyI18n(root, i18n, () => ({ name: "Ana" }));
+  applyI18n(first, i18n, () => ({ name: "Bea" }));
+  i18n.setLocale("es-UY");
+  applyI18n(root, i18n);
+  assert.equal(first.textContent, "Hola, Bea");
+  assert.equal(second.textContent, "Hola, Ana");
+  first.setAttribute("data-i18n", "fallback");
+  applyI18n(first, i18n);
+  first.setAttribute("data-i18n", "greeting");
+  applyI18n(first, i18n);
+  assert.equal(first.textContent, "Hola, {name}");
+});
+
+test("cyclic fallback routes terminate and invalid catalogs never execute accessors", () => {
+  const i18n = createI18n({ catalogs, locale: "es-UY", fallbacks: { es: ["es-419"], "es-419": ["es"] } });
+  assert.equal(i18n.t("greeting", { name: "Ana" }), "Hola, Ana");
+  const hidden = {};
+  Object.defineProperty(hidden, "greeting", { value: "Hi" });
+  const symbol = { [Symbol("key")]: "Hi" };
+  const inherited = Object.create({ greeting: "Hi" });
+  for (const en of [hidden, symbol, inherited]) assert.throws(() => createI18n({ catalogs: { en } }), TypeError);
+});
+
+test("older Intl runtimes retain ordinary RTL scripts and unsupported Intl leaves Setup English", () => {
+  const context = { Intl: {
+    getCanonicalLocales: Intl.getCanonicalLocales, NumberFormat: Intl.NumberFormat,
+    PluralRules: Intl.PluralRules, DateTimeFormat: Intl.DateTimeFormat,
+  } };
+  runInNewContext(readFileSync(resolve(__dirname, "../../web/i18n-core.js"), "utf8"), context);
+  assert.equal(runInNewContext('createI18n({ catalogs: { en: { hello: "Hello" } } }).direction("ar")', context), "rtl");
+  assert.equal(runInNewContext('createI18n({ catalogs: { en: { hello: "Hello" } } }).direction("az-Arab")', context), "rtl");
+  const unsupported = { Intl: undefined };
+  runInNewContext(readFileSync(resolve(__dirname, "../../web/setup-i18n.js"), "utf8"), unsupported);
+  assert.equal(unsupported.LastbookI18n, undefined);
+});
+
+test("Setup facade retains a dynamic provider across both locale selectors", () => {
+  const leaf = new FakeElement({ "data-i18n": "greeting" });
+  const document = new FakeElement({}, "", [leaf]);
+  const context = { navigator: { languages: ["en"] }, document };
+  runInNewContext(readFileSync(resolve(__dirname, "../../web/i18n-core.js"), "utf8"), context);
+  runInNewContext(readFileSync(resolve(__dirname, "../../web/i18n-dom.js"), "utf8"), context);
+  runInNewContext("globalThis.lastbookI18nCatalogs = " + JSON.stringify(catalogs), context);
+  runInNewContext(readFileSync(resolve(__dirname, "../../web/setup-i18n.js"), "utf8"), context);
+  let name = "Ana";
+  context.LastbookI18n.apply(leaf, () => ({ name }));
+  context.LastbookI18n.setLocale("es-UY");
+  assert.equal(leaf.textContent, "Hola, Ana");
+  name = '<img src=x onerror="boom()">';
+  context.LastbookI18n.usePreferredLocales(["en-US"]);
+  assert.equal(leaf.textContent, 'Hello, <img src=x onerror="boom()">');
+  assert.equal(leaf.childElementCount, 0);
+});
+
+// Small socket-free DOM fixture for running the actual Setup controller. The
+// browser smoke check complements this fixture; no DOM package ships in Lastbook.
+class SetupDocument extends FakeElement {
+  constructor() {
+    super();
+    this.main = new FakeElement({ id: "main" });
+    this.children = [this.main, new FakeElement({ id: "live" }), new FakeElement({ id: "sBack" })];
+    this.documentElement = { classList: { contains: () => false } };
+    for (const element of this.children) this.wire(element);
+  }
+  wire(element) {
+    element.focus = () => { this.activeElement = element; };
+    element.querySelector = selector => this.find(element, selector);
+    Object.defineProperty(element, "innerHTML", { set: html => {
+      element.children = [...html.matchAll(/<([a-z][a-z0-9]*)\b([^>]*)>/gi)].map(([, , raw]) => {
+        const attrs = Object.fromEntries([...raw.matchAll(/([\w-]+)="([^"]*)"/g)].map(([, k, v]) => [k, v]));
+        const child = new FakeElement(attrs);
+        this.wire(child);
+        return child;
+      });
+    } });
+  }
+  find(root, selector) {
+    for (const element of root.children) {
+      if (selector.startsWith("#") && element.getAttribute("id") === selector.slice(1)) return element;
+      const child = this.find(element, selector);
+      if (child) return child;
+    }
+    return null;
+  }
+  querySelector(selector) { return this.find(this, selector) || this.find(this.main, selector); }
+}
+
+test("actual Setup state fetch and a subsequent choose rerender keep the pilot translated", async () => {
+  const document = new SetupDocument();
+  const state = { mode: "setup", hardware: {}, manifest: { packs: [], models: [] }, found: [] };
+  const calls = [];
+  let releaseState;
+  const stateReady = new Promise(resolve => { releaseState = resolve; });
+  const context = {
+    document, navigator: { languages: ["es-UY"] }, location: { hash: "" },
+    setTimeout, clearTimeout, scrollTo() {}, addEventListener() {},
+    fetch: async path => {
+      calls.push(path);
+      if (path.endsWith("/state") && calls.length === 1) await stateReady;
+      return { ok: true, json: async () => path.endsWith("/pick") ? { path: "/path/to/model.gguf" } : path.endsWith("/use") ? { noted: true } : state };
+    },
+  };
+  for (const script of ["i18n-core.js", "i18n-dom.js", "i18n-catalogs.js", "setup-i18n.js", "setup.js"]) {
+    runInNewContext(readFileSync(resolve(__dirname, "../../web", script), "utf8"), context);
+  }
+  assert.deepEqual(calls, ["/api/setup/state"]);
+  releaseState();
+  await new Promise(resolve => setImmediate(resolve));
+  const title = () => document.main.children.find(element => element.getAttribute("data-i18n") === "setup.title");
+  assert.equal(title().textContent, "Configurar Lastbook");
+  assert.equal(title().getAttribute("lang"), "es-419");
+  assert.equal(document.querySelector("#packH").textContent, "Biblioteca");
+  const oldTitle = title();
+  await document.querySelector("#haveFile").onclick(); // /pick -> /use -> /state -> chooseView directly
+  assert.deepEqual(calls, ["/api/setup/state", "/api/setup/pick", "/api/setup/use", "/api/setup/state"]);
+  assert.notEqual(title(), oldTitle);
+  assert.equal(title().textContent, "Configurar Lastbook");
+  assert.equal(document.querySelector("#packH").textContent, "Biblioteca");
+  context.LastbookI18n.setLocale("en");
+  assert.equal(title().textContent, "Set up Lastbook");
+  assert.equal(document.querySelector("#packH").textContent, "Library");
 });

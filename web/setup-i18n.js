@@ -1,5 +1,5 @@
-/* The Setup consumer of the reusable offline i18n core. Only three labels
-   are opted in for this first integration; the rest of Setup stays English. */
+/* Setup's small opt-in pilot, including the heading/intro after state loads.
+   Unmarked Setup UI stays English. */
 (function (root) {
   "use strict";
   if (!root.Intl || typeof root.Intl.getCanonicalLocales !== "function" ||
@@ -27,6 +27,7 @@
     chooseLocale: engine.chooseLocale,
     number: engine.number,
     date: engine.date,
+    direction: engine.direction,
     apply(scope = root.document, paramsFor) { root.applyI18n(scope, engine, paramsFor); },
     setLocale(locale) {
       engine.setLocale(locale);

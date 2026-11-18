@@ -10,6 +10,18 @@
   const variables = /\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
   const keyPattern = /^[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*$/;
   const pluralPattern = /^(zero|one|two|few|many|other|=(?:0|[1-9]\d*))$/;
+  const precision = { minimumFractionDigits: 0, maximumFractionDigits: 3 };
+
+  function direction(tag) {
+    // maximize() also handles script overrides (az-Arab versus az-Latn).
+    // Older WebViews may lack Locale/textInfo; ordinary RTL tags still work.
+    const locale = typeof Intl.Locale === "function" ? new Intl.Locale(tag) : null;
+    const info = locale?.getTextInfo?.() || locale?.textInfo;
+    if (info?.direction === "rtl" || info?.direction === "ltr") return info.direction;
+    const script = locale?.maximize?.().script || tag.split("-").find(part => /^[A-Z][a-z]{3}$/.test(part));
+    if (script) return /^(Adlm|Arab|Hebr|Mand|Mend|Nkoo|Rohg|Samr|Syrc|Thaa)$/.test(script) ? "rtl" : "ltr";
+    return /^(ar|arc|ckb|dv|fa|he|ks|nqo|ps|sd|syr|ug|ur|yi)(-|$)/.test(tag) ? "rtl" : "ltr";
+  }
 
   // Intl accepts Unicode locale identifiers, a well-defined subset of BCP 47.
   function canonical(tag) {
@@ -63,6 +75,11 @@
       const expected = signature(forms.get("other"), key, true);
       for (const [form, message] of forms) {
         if (!pluralPattern.test(form)) throw new TypeError("Invalid plural form " + form + " in " + key);
+        // Exact forms are integer Number values. Reject decimal strings that
+        // cannot be represented exactly rather than silently matching a neighbor.
+        if (form.startsWith("=") && !Number.isSafeInteger(Number(form.slice(1)))) {
+          throw new TypeError("Unsafe exact plural form " + form + " in " + key);
+        }
         if (signature(message, key, true) !== expected) {
           throw new TypeError("Inconsistent placeholders in " + key);
         }
@@ -115,13 +132,15 @@
     }
 
     const plurals = new Map();
-    const numbers = new Map();
+    let countFormatter;
     let selected, chain;
     function setLocale(tag) {
       const next = canonical(tag);
       const nextChain = resolveChain(next, routes, defaultLocale, true);
+      const nextFormatter = new Intl.NumberFormat(next, precision);
       selected = next;
       chain = nextChain;
+      countFormatter = nextFormatter;
       return selected;
     }
 
@@ -134,7 +153,11 @@
           if (error instanceof RangeError || error instanceof TypeError) continue;
           throw error;
         }
+        // Only the preference's natural ancestry may explicitly choose the
+        // default; a route such as fr -> en must not hide a later Spanish choice.
+        const explicitDefault = resolveChain(tag, new Map(), defaultLocale, false).includes(defaultLocale);
         if (resolveChain(tag, routes, defaultLocale, false).some(next => {
+          if (next === defaultLocale && !explicitDefault) return false;
           const catalog = messages.get(next);
           return catalog && catalog.size > 0;
         })) return tag;
@@ -143,18 +166,17 @@
     }
 
     function pluralRules(tag) {
-      if (!plurals.has(tag)) plurals.set(tag, new Intl.PluralRules(tag));
+      if (!plurals.has(tag)) plurals.set(tag, new Intl.PluralRules(tag, precision));
       return plurals.get(tag);
-    }
-    function numberFormatter(tag) {
-      if (!numbers.has(tag)) numbers.set(tag, new Intl.NumberFormat(tag));
-      return numbers.get(tag);
     }
     function interpolate(message, params, tag, count) {
       return message.replace(variables, (original, name) => {
-        if (name === "count" && count !== undefined) return numberFormatter(tag).format(count);
-        const value = parameter(params, name);
-        return ["string", "number", "boolean"].includes(typeof value) ? String(value) : original;
+        const value = name === "count" && count !== undefined
+          ? countFormatter.format(count) : parameter(params, name);
+        if (!["string", "number", "boolean"].includes(typeof value)) return original;
+        // Unicode isolates keep an LTR name, path or formatted count within an
+        // RTL sentence without adding markup or changing its spoken content.
+        return direction(tag) === "rtl" ? "\u2068" + String(value) + "\u2069" : String(value);
       });
     }
 
@@ -169,8 +191,8 @@
         if (!Number.isFinite(count)) throw new TypeError("Expected finite numeric count for " + key);
         const exact = entry.forms.get("=" + count);
         const form = exact ?? entry.forms.get(pluralRules(tag).select(count)) ?? entry.forms.get("other");
-        // Intl.NumberFormat and Intl.PluralRules share default rounding precision
-        // (maximum three fractional digits); displayed count agrees with grammar.
+        // Grammar belongs to the message; numbers retain the selected region
+        // and Unicode numbering-system preference, with shared rounding.
         return { text: interpolate(form, params, tag, count), locale: tag };
       }
       return undefined;
@@ -182,6 +204,7 @@
       get supportedLocales() { return Object.freeze([...messages.keys()]); },
       setLocale,
       chooseLocale,
+      direction,
       usePreferredLocales(preferred) { return setLocale(chooseLocale(preferred)); },
       resolve,
       t(key, params) { return resolve(key, params)?.text; },
