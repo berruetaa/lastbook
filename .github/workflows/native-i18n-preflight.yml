@@ -22,13 +22,13 @@ jobs:
         shell: bash
     steps:
       - name: Check out branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Install Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
       - name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '22'
       - name: Validate source catalogues and generated scripts
@@ -48,7 +48,7 @@ jobs:
           bash -n packaging/build_app_macos.sh
       - name: Save staged web assets
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: staged-web-${{ matrix.os }}
           path: ${{ runner.temp }}/lastbook-i18n-stage/web/
