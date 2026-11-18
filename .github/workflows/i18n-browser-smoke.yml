@@ -1,0 +1,48 @@
+name: i18n browser smoke (fork QA)
+
+on:
+  push:
+    branches:
+      - test/i18n-browser-smoke
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core-and-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Offline core tests
+        run: node --test app/tests/i18n_core_test.cjs
+      - name: Shipping tests
+        run: python3 -B -m unittest app.tests.test_what_ships
+
+  edge-dom:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify local HTML fixture in Microsoft Edge
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fixture = (Resolve-Path "app/tests/i18n_dom_test.html").Path
+          $uri = [System.Uri]::new($fixture).AbsoluteUri
+          $edge = Join-Path ${env:ProgramFiles(x86)} "Microsoft\Edge\Application\msedge.exe"
+          if (-not (Test-Path $edge)) {
+            $edge = Join-Path $env:ProgramFiles "Microsoft\Edge\Application\msedge.exe"
+          }
+          if (-not (Test-Path $edge)) { throw "Microsoft Edge is unavailable on this runner" }
+          $dump = & $edge --headless=new --no-first-run --disable-gpu --disable-background-networking --disable-extensions --dump-dom $uri 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host $dump
+            throw "Edge exited with code $LASTEXITCODE"
+          }
+          if ($dump -notmatch '(?s)<pre\s+id="result">\s*PASS\s*</pre>') {
+            Write-Host $dump
+            throw "DOM fixture did not report PASS"
+          }
+          Write-Host "PASS: local i18n DOM assertions in Microsoft Edge"
