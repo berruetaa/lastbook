@@ -191,7 +191,7 @@ function crumbs(list) {
 }
 function backButton(from, fallback = ['nav.back', 'Back']) {
   let [key, label] = fallback;
-  const href = from || '#/';
+  const href = from?.startsWith('#') ? from : '#/';
   const m = /^#\/t\/([\w-]+)/.exec(href);
   if (m && topicById(m[1])) [key, label] = [null, SHORT[m[1]] || topicById(m[1]).title];
   else if (href.startsWith('#/search')) [key, label] = ['search.results', 'Search results'];

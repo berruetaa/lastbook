@@ -16,6 +16,7 @@ import unittest
 from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from queue import Empty, Queue
 from unittest.mock import patch
 
 from playwright.sync_api import expect, sync_playwright
@@ -41,6 +42,12 @@ class Relay(BaseHTTPRequestHandler):
         if hold is not None and not hold.wait(15):
             self.send_error(503)
             return
+        gate = None
+        if self.path == ROUTE:
+            try:
+                gate = self.server.language_replies[self.command].get_nowait()
+            except (Empty, KeyError):
+                pass
         done = threading.Event()
         responses = []
 
@@ -54,6 +61,12 @@ class Relay(BaseHTTPRequestHandler):
             return
         response = responses[0]
         try:
+            if gate:
+                arrived, release = gate
+                arrived.set()
+                if not release.wait(15):
+                    self.send_error(504)
+                    return
             self.send_response(response.status)
             for name, value in response.headers:
                 self.send_header(name, value)
@@ -80,6 +93,7 @@ def serve(module=None, language_file=None):
         host = 'lastbook.invalid' if module else '127.0.0.1'
         origin = f'http://{host}:{http.server_port}'
         http.holds = {}
+        http.language_replies = {method: Queue() for method in ('GET', 'POST')}
         if module:
             http.bridge = bridge.Bridge(module, 'buffer', origin, language_file=language_file)
         worker = threading.Thread(target=http.serve_forever, daemon=True)
@@ -91,6 +105,16 @@ def serve(module=None, language_file=None):
                 gate.set()
             http.shutdown()
             worker.join()
+
+
+@contextlib.contextmanager
+def delay_language_reply(http, method):
+    arrived, release = threading.Event(), threading.Event()
+    http.language_replies[method].put((arrived, release))
+    try:
+        yield arrived, release
+    finally:
+        release.set()
 
 
 class Browser(unittest.TestCase):
@@ -253,6 +277,104 @@ class Browser(unittest.TestCase):
             expect(page.get_by_role('status')).to_have_text('Idioma guardado.')
             expect(page.get_by_role('button', name='Resume')).to_be_visible()
 
+    def test_preference_loading_guards_submit_on_success_and_failure(self):
+        self.configure_setup()
+        for fails in (False, True):
+            with self.subTest(fails=fails), serve(server.setup_api.SetupServer, self.language_file) as (origin, http):
+                with self.page(origin, http) as page, delay_language_reply(http, 'GET') as (arrived, release):
+                    if fails:
+                        with patch.object(bridge.ui_language, '_load', side_effect=PermissionError):
+                            page.goto(origin)
+                            self.assertTrue(arrived.wait(5))
+                    else:
+                        page.goto(origin)
+                        self.assertTrue(arrived.wait(5))
+                    posts = []
+                    page.on('request', lambda r: posts.append(r) if r.method == 'POST' and r.url.endswith(ROUTE) else None)
+                    expect(page.locator('#languageSettings')).to_be_hidden()
+                    page.eval_on_selector('#languageSettings', """form => {
+                        form.querySelector('select').value = 'es-419';
+                        form.requestSubmit();
+                    }""")
+                    expect(page.locator('h1')).to_have_text('Set up Lastbook')
+                    if fails:
+                        expect(page.locator('#languageStatus')).to_be_empty()
+                    release.set()
+                    expect(page.get_by_label('Interface language')).to_have_value('en')
+                    if fails:
+                        expect(page.get_by_role('status')).to_have_text('Could not load the saved language.')
+                    self.assertEqual(posts, [])
+                    self.assertFalse(self.language_file.exists())
+                    page.get_by_label('Interface language').select_option('es-419')
+                    page.get_by_role('button', name='Save language').press('Enter')
+                    expect(page.get_by_role('status')).to_have_text('Idioma guardado.')
+                self.language_file.unlink()
+
+    def test_library_ignores_an_old_get_after_a_save_and_route_change(self):
+        self.configure_setup(current=DATA)
+        with serve(server, self.language_file) as (origin, http), self.page(origin, http) as library:
+            library.add_init_script("""window.languageReads = 0;
+                const readJSON = Response.prototype.json;
+                Response.prototype.json = async function () {
+                    const data = await readJSON.call(this);
+                    if (this.url.endsWith('/api/ui-language')) setTimeout(() => window.languageReads++, 0);
+                    return data;
+                };""")
+            with delay_language_reply(http, 'GET') as (arrived, release):
+                library.goto(origin + '/#/guides')
+                self.assertTrue(arrived.wait(5))
+                with self.page(origin, http) as settings:
+                    settings.goto(origin + '/ui/setup.html#manage')
+                    settings.get_by_label('Interface language').select_option('es-419')
+                    settings.get_by_role('button', name='Save language').click()
+                    expect(settings.get_by_role('status')).to_have_text('Idioma guardado.')
+                library.evaluate("""() => {
+                    location.hash = '#/search';
+                    dispatchEvent(new PageTransitionEvent('pageshow', {persisted: true}));
+                }""")
+                expect(library.locator('.side').get_by_role('link', name='Guías')).to_be_visible()
+                search = library.get_by_role('searchbox', name='Buscar en la biblioteca')
+                search.focus()
+                release.set()
+                library.wait_for_function('window.languageReads === 2')
+                expect(search).to_be_focused()
+                expect(library.locator('.side').get_by_role('link', name='Guías')).to_be_visible()
+
+    def test_delayed_save_replies_from_two_windows_preserve_the_last_commit(self):
+        self.configure_setup()
+        for fails in (False, True):
+            with self.subTest(fails=fails), serve(server.setup_api.SetupServer, self.language_file) as (origin, http):
+                with self.page(origin, http) as first, self.page(origin, http) as second:
+                    first.goto(origin)
+                    second.goto(origin)
+                    first_posts = []
+                    first.on('request', lambda r: first_posts.append(r) if r.method == 'POST' and r.url.endswith(ROUTE) else None)
+                    first.get_by_label('Interface language').select_option('es-419')
+                    expect(second.get_by_label('Interface language')).to_have_value('en')
+                    with delay_language_reply(http, 'POST') as (arrived, release):
+                        if fails:
+                            with patch.object(bridge.ui_language.os, 'replace', side_effect=PermissionError):
+                                first.get_by_role('button', name='Save language').click()
+                                self.assertTrue(arrived.wait(5))
+                        else:
+                            first.get_by_role('button', name='Save language').click()
+                            self.assertTrue(arrived.wait(5))
+                        expect(first.get_by_role('status')).to_have_text('Saving language…')
+                        first.get_by_label('Interface language').select_option('en')
+                        first.eval_on_selector('#languageSettings', 'form => form.requestSubmit()')
+                        second.get_by_role('button', name='Save language').click()
+                        expect(second.get_by_role('status')).to_have_text('Language saved.')
+                        release.set()
+                        expected = 'Could not save the language. Try again.' if fails else 'Idioma guardado.'
+                        expect(first.get_by_role('status')).to_have_text(expected)
+                        expect(second.get_by_role('status')).to_have_text('Language saved.')
+                        self.assertEqual(len(first_posts), 1)
+                        self.assertEqual(json.loads(self.language_file.read_bytes()), {'language': 'en'})
+                with self.page(origin, http, 'es-UY') as restarted:
+                    restarted.goto(origin)
+                    expect(restarted.get_by_label('Interface language')).to_have_value('en')
+                self.language_file.unlink()
+
     def test_failures_are_visible_and_never_replace_the_saved_preference(self):
         self.configure_setup()
         self.language_file.mkdir()  # replacing a directory with the preference file fails at the filesystem
@@ -285,7 +407,44 @@ class Browser(unittest.TestCase):
             expect(page.locator('h1')).to_have_text('Set up Lastbook')
             self.assertEqual(self.language_file.read_bytes(), invalid)
 
-    def test_local_http_has_no_preference_route_and_localizes_its_cached_shell(self):
+    def test_desktop_requires_opt_in_even_with_spanish_or_invalid_browser_locales(self):
+        self.configure_setup(current=DATA)
+        with serve(server, self.language_file) as (origin, http):
+            for locale in ('en-US', 'es-UY', 'es-AR', 'es-CL', 'es-ES', 'fr-FR', 'malformed_tag'):
+                with self.subTest(locale=locale), self.page(origin, http) as page:
+                    page.add_init_script(f"Object.defineProperty(navigator, 'languages', {{value: [{json.dumps(locale)}]}})")
+                    page.goto(origin + '/ui/setup.html#manage')
+                    expect(page.get_by_label('Interface language')).to_have_value('en')
+                    self.assertFalse(self.language_file.exists())
+            self.language_file.write_text('{"language":"es-419"}', encoding='utf-8')
+            with self.page(origin, http, 'fr-FR') as page:
+                page.goto(origin + '/ui/setup.html#manage')
+                expect(page.get_by_label('Idioma de la interfaz')).to_have_value('es-419')
+                expect(page.locator('h1')).to_have_text('Biblioteca e IA local')
+
+    def test_navigation_helpers_keep_their_labels_and_local_back_target(self):
+        self.configure_setup(current=DATA)
+        self.language_file.write_text('{"language":"es-419"}', encoding='utf-8')
+        with serve(server, self.language_file) as (origin, http), self.page(origin, http) as page:
+            page.goto(origin + '/#/videos/all')
+            expect(page.get_by_role('button', name='Ir', exact=True)).to_be_visible()
+            page.locator('#vq').fill('water')
+            page.get_by_role('button', name='Ir', exact=True).click()
+            page.wait_for_url('**/#/videos/all?*q=water*')
+            page.evaluate("(id) => location.hash = '#/shelf/' + id", server.SHELVES[0][0])
+            expect(page.get_by_role('button', name='Filtrar', exact=True)).to_be_visible()
+            expect(page.locator('a[data-back]')).to_have_text('Biblioteca')
+            page.evaluate("(from) => location.hash = '#/watch/vida?from=' + encodeURIComponent(from)", 'javascript:void(0)')
+            expect(page.locator('a[data-back]')).to_have_attribute('href', '#/')
+            page.evaluate("location.hash = '#/watch/vida?from=%23guides'")
+            back = page.locator('a[data-back]')
+            expect(back).to_have_attribute('href', '#guides')
+            page.set_viewport_size({'width': 390, 'height': 780})
+            back.click()
+            page.wait_for_url('**/#guides')
+            expect(page.locator('h1')).to_have_text('What do you need?')
+
+    def test_local_http_has_no_preference_route_and_keeps_its_shell_offline(self):
         self.configure_setup(current=DATA)
         with serve() as (origin, http):
             connection = HTTPConnection('127.0.0.1', http.server_port, timeout=5)
@@ -299,14 +458,15 @@ class Browser(unittest.TestCase):
             finally:
                 connection.close()
             self.assertFalse(self.language_file.exists())
-            for locale, expected in [('es-ES', 'Guides'), ('es-CL', 'Guías')]:
+            for locale in ('en-US', 'es-UY', 'es-AR', 'es-CL', 'es-ES', 'fr-FR'):
                 with self.page(origin, http, locale) as page:
                     page.goto(origin + '/#/guides')
-                    guides = page.locator('.side').get_by_role('link', name=expected)
+                    guides = page.locator('.side').get_by_role('link', name='Guides')
                     expect(guides).to_be_visible()
                     expect(page.locator('#sideSettings')).to_be_hidden()
                     page.wait_for_function('!!navigator.serviceWorker.controller')
                     if locale == 'es-CL':
+                        self.assertFalse(page.evaluate("async () => !!await caches.match('/api/ui-language')"))
                         page.context.set_offline(True)
                         page.reload(wait_until='domcontentloaded')
                         expect(guides).to_be_visible()

@@ -2,6 +2,7 @@
 import argparse
 import json
 import re
+from html.parser import HTMLParser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,13 +12,27 @@ REQUIRED = {'en', 'es-419'}
 SCRIPTS = ('i18n-core.js', 'i18n-dom.js', 'i18n-en.js', 'i18n-locales.js', 'i18n-app.js')
 ENTRIES = {'index.html': 'app.js', 'setup.html': 'setup.js'}
 RUNTIME = (*SCRIPTS, *ENTRIES, *ENTRIES.values(), 'plat.js', 'app.css', 'setup.css', 'sw.js')
-LOCAL_SCRIPT = re.compile(r'''<script\b[^>]*\bsrc=["']/ui/([^"'?#]+)''')
 LOCALE = re.compile(r'[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-(?:[A-Z]{2}|[0-9]{3}))?')
 KEY = re.compile(r'[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*')
 PLACEHOLDER = re.compile(r'\{([A-Za-z_][A-Za-z0-9_]*)\}')
 PLURAL = re.compile(r'zero|one|two|few|many|other|=(?:0|[1-9][0-9]*)')
 # Match the JavaScript catalogue validator's String.prototype.trim().
 BLANK = re.compile(r'[\u0009-\u000d\u0020\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]*')
+
+
+class LocalScripts(HTMLParser):
+    """Collect the classic, immediately executed local script references."""
+
+    def __init__(self):
+        super().__init__()
+        self.names = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'script':
+            attrs = dict(attrs)
+            src = attrs.get('src') or ''
+            if src.startswith('/ui/') and attrs.keys().isdisjoint(('async', 'defer', 'nomodule', 'type')):
+                self.names.append(re.split(r'[?#]', src[4:], maxsplit=1)[0])
 
 
 def unique_object(pairs):
@@ -116,9 +131,11 @@ def check_assets(web, generated):
         if (web / name).read_bytes() != expected:
             raise ValueError(f'{web / name}: stale catalogue. Run python3 packaging/i18n_catalogs.py')
     for page, controller in ENTRIES.items():
-        scripts = LOCAL_SCRIPT.findall((web / page).read_text(encoding='utf-8'))
+        scripts = LocalScripts()
+        scripts.feed((web / page).read_text(encoding='utf-8'))
+        scripts.close()
         expected = [*SCRIPTS, controller]
-        if scripts[-len(expected):] != expected:
+        if scripts.names[-len(expected):] != expected:
             raise ValueError(f'{web / page}: missing or misordered localization scripts')
     if web.resolve() != WEB.resolve():
         for name in RUNTIME:

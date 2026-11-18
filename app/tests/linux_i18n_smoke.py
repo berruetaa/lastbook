@@ -60,8 +60,10 @@ def select(proc, title, end):
     else:
         n = combos[0]
     assert n['acc'].queryComponent().grabFocus(), 'the select could not take focus'
-    key('space')
-    key('End' if end else 'Home', 'Return')
+    wait_for(lambda: n['acc'].getState().contains(pyatspi.STATE_FOCUSED), 'language select did not take focus')
+    # The chooser has two options. Move directly from the saved/default option
+    # without depending on when WebKitGTK's separate popup is ready for keys.
+    key('Down' if end else 'Up')
 
 
 def press(proc, name):

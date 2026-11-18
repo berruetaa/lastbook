@@ -93,6 +93,13 @@ class Catalogues(unittest.TestCase):
         (web / 'setup.html').write_text('<!doctype html><title>Old Setup</title>', encoding='utf-8')
         with self.assertRaisesRegex(ValueError, 'missing or misordered localization scripts'):
             catalogues.check_assets(web, generated)
+        setup = (ROOT / 'web' / 'setup.html').read_text(encoding='utf-8')
+        script = next(line for line in setup.splitlines() if 'src="/ui/i18n-app.js' in line)
+        for bad in ('<!--' + script + '-->', script.replace('src=', 'data-src='), script.replace('<script ', '<script defer ')):
+            with self.subTest(script=bad):
+                (web / 'setup.html').write_text(setup.replace(script, bad), encoding='utf-8')
+                with self.assertRaisesRegex(ValueError, 'missing or misordered localization scripts'):
+                    catalogues.check_assets(web, generated)
         shutil.copyfile(ROOT / 'web' / 'setup.html', web / 'setup.html')
         (web / 'app.js').write_bytes(b'// old controller\n')
         with self.assertRaisesRegex(ValueError, 'packaged web asset differs from source'):

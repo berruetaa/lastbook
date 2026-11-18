@@ -26,7 +26,12 @@ def _load(path):
     try:
         if not stat.S_ISREG(path.lstat().st_mode):
             return None
-        with path.open('rb') as f:
+        # On POSIX, a local path swap between lstat and open must neither
+        # follow a symlink nor wait for a pipe to acquire a writer.
+        flags = os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+        with os.fdopen(os.open(path, flags), 'rb') as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                return None
             data = f.read(MAX_BYTES + 1)
     except FileNotFoundError:
         return None

@@ -15,19 +15,20 @@
     try { engine = createI18n({ catalogs: { en: english, 'es-419': regional }, fallbacks }); } catch { /* Keep English. */ }
   }
 
-  const languages = navigator.languages?.length ? navigator.languages : [navigator.language];
   const form = desktop && document.getElementById('languageSettings');
   const select = form && form.querySelector('select');
   const button = form && form.querySelector('button');
   const status = form && document.getElementById('languageStatus');
-  let selection, saving = false;
+  let selection = 'en';
+  let phase = 'loading';
+  let readGeneration = 0;
 
   const apply = (scope = document, paramsFor) => applyI18n(scope, engine, paramsFor);
   window.LastbookI18n = Object.freeze({ apply });
 
   function activate(saved) {
-    engine.usePreferredLocales(saved || languages);
-    selection = saved || engine.catalogLocale;
+    selection = saved || 'en';
+    engine.usePreferredLocales(selection);
     apply();
     document.dispatchEvent(new Event('lastbook:languagechange'));
   }
@@ -60,14 +61,18 @@
   }
 
   async function load() {
+    const generation = ++readGeneration;
     let message;
     try {
       const saved = await preference();
+      if (generation !== readGeneration) return;
       activate(saved);
       if (saved && saved !== engine.catalogLocale) message = 'language.unavailable';
     } catch { message = 'language.loadFailed'; }
+    if (generation !== readGeneration) return;
     if (form) {
       select.value = selection;
+      phase = 'idle';
       form.hidden = false;
       announce(message);
     }
@@ -78,8 +83,10 @@
     form.addEventListener('submit', async event => {
       event.preventDefault();
       const next = select.value;
-      if (saving || !engine.supportedLocales.includes(next)) return;
-      saving = true;
+      // Settings load once before accepting edits. Keep only one write in
+      // flight per document so its replies cannot arrive out of order.
+      if (phase !== 'idle' || !engine.supportedLocales.includes(next)) return;
+      phase = 'saving';
       button.setAttribute('aria-disabled', 'true');
       announce('language.saving');
       try {
@@ -92,7 +99,7 @@
         announce('language.saveFailed');
       } finally {
         button.removeAttribute('aria-disabled');
-        saving = false;
+        phase = 'idle';
       }
     });
   }

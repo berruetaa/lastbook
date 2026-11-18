@@ -701,8 +701,8 @@ class Bridge:
         if refused:
             status, reason, hs, text = refused
             sink.head(status, reason, hs)
-            ack = lambda: None
-            sink.data(text, ack)
+            if method != 'HEAD':
+                sink.data(text, lambda: None)
             sink.finish(True)
             return None
         target, raw, lane = prepared
@@ -711,7 +711,8 @@ class Bridge:
             self.count('queue-full')
             status, reason, hs, text = _plain(503, 'Busy', b'too many requests')
             sink.head(status, reason, hs)
-            sink.data(text, lambda: None)
+            if method != 'HEAD':
+                sink.data(text, lambda: None)
             sink.finish(True)
             return None
         self.waiting_now.set()
@@ -721,7 +722,7 @@ class Bridge:
         """Buffer mode. done(Response) runs on a worker, or at once on this thread for a refusal. Returns the Exchange or None."""
         refused, prepared = self._prepare(method, url, headers, body, is_document)
         if refused:
-            done(Response(refused[0], refused[1], refused[2], body=refused[3]))
+            done(Response(refused[0], refused[1], refused[2], body=None if method == 'HEAD' else refused[3]))
             return None
         target, raw, lane = prepared
         if target.split('?', 1)[0].startswith('/__bridge/'):
@@ -731,7 +732,7 @@ class Bridge:
         if not lane.submit(ex):
             self.count('queue-full')
             status, reason, hs, text = _plain(503, 'Busy', b'too many requests')
-            done(Response(status, reason, hs, body=text))
+            done(Response(status, reason, hs, body=None if method == 'HEAD' else text))
             return None
         self.waiting_now.set()
         return ex

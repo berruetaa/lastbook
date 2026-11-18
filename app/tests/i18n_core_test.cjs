@@ -6,6 +6,15 @@ const { runInNewContext } = require("node:vm");
 const createI18n = require("../../web/i18n-core.js");
 const applyI18n = require("../../web/i18n-dom.js");
 
+test("the shared iPad scheme without the desktop marker skips desktop localization", () => {
+  const window = {
+    get createI18n() { assert.fail("desktop localization started"); },
+  };
+  const script = readFileSync(resolve(__dirname, "../../web/i18n-app.js"), "utf8");
+  runInNewContext(script, { window, location: { protocol: "lastbook:" } });
+  assert.equal(window.LastbookI18n, undefined);
+});
+
 const catalogs = {
   en: {
     greeting: "Hello, {name}",
