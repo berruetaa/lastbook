@@ -6,6 +6,8 @@
 Uses the made-up library in derived/app-build/testdata (no model) and a stub for chat. Never packaged."""
 import faulthandler, hashlib, json, os, shutil, socket, statistics, subprocess, sys, threading, time, types, unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 faulthandler.dump_traceback_later(600, exit=True)
@@ -208,6 +210,148 @@ class Both:
 
     def get(self, path, rng=None, **k):
         return call(self.b, 'GET', path, {'Range': rng} if rng else {}, **k)
+
+    def language_bridge(self, module=server, file=None):
+        if file is None:
+            tmp = TemporaryDirectory()
+            self.addCleanup(tmp.cleanup)
+            file = Path(tmp.name) / B.ui_language.FILENAME
+        bridge = B.Bridge(module, self.mode, OR[self.mode], language_file=file)
+        headers = {B.KEY_HEADER: bridge.key, 'Content-Type': 'application/json'}
+        return file, bridge, headers
+
+    def test_language_reads_and_writes_require_the_desktop_key(self):
+        file, b, key = self.language_bridge()
+        route, body = B.ui_language.ROUTE, b'{"language":"es-419"}'
+        self.assertEqual(call(b, 'POST', route, key, body).status, 200)
+        for method in ('GET', 'HEAD', 'POST'):
+            for headers in (None, {**key, B.KEY_HEADER: 'wrong'}, {**key, 'Origin': 'null'},
+                            {**key, 'Origin': 'https://other.invalid'}):
+                with self.subTest(method=method, headers=bool(headers)):
+                    r = call(b, method, route, headers, b'{"language":"en"}')
+                    self.assertEqual(r.status, 403)
+                    self.assertNotIn(b'es-419', r.body)
+                    if method == 'HEAD':
+                        self.assertEqual(r.body, b'')
+        r = call(b, 'GET', route, {**key, 'Origin': b.origin})
+        self.assertEqual(r.status, 200)
+        self.assertEqual(r.hs['cache-control'], 'no-store')
+        self.assertEqual(json.loads(r.body), {'language': 'es-419'})
+        self.assertEqual(call(b, 'HEAD', route, key).body, b'')
+        self.assertEqual(json.loads(file.read_bytes()), {'language': 'es-419'})
+        self.assertEqual(call(self.b, 'GET', route, self.key).status, 404)
+
+    def test_language_rejects_invalid_bodies_and_paths(self):
+        file, b, key = self.language_bridge()
+        route = B.ui_language.ROUTE
+        bad = (b'', b'null', b'[]', b'{', b'{}', b'{"language":null}', b'{"language":true}',
+               b'{"language":"en","language":"es-419"}', b'{"language":["en"]}', b'{"language":"es-ES"}',
+               b'{"language":"en","path":"../settings.json"}', b'{"language":"../settings.json"}',
+               b'{"language":"<img src=x>"}', b'{"language":"\xff"}', b' ' * 129)
+        for body in bad:
+            with self.subTest(body=body):
+                self.assertEqual(call(b, 'POST', route, key, body).status, 400)
+        self.assertEqual(call(b, 'POST', route, {**key, 'Content-Type': 'application/jsonp'}, b'{"language":"en"}').status, 400)
+        for target in (route + '/', route + '?path=../settings.json', '/api/%75i-language', '/ui/../ui-language.json', '/ui/%2e%2e/ui-language.json'):
+            with self.subTest(target=target):
+                self.assertEqual(call(b, 'POST', target, key, b'{"language":"en"}').status, 404)
+                self.assertEqual(call(b, 'GET', target).status, 404)
+        self.assertFalse(file.exists())
+
+    def test_language_file_survives_setup_library_and_new_bridge_keys(self):
+        file, setup, key = self.language_bridge(server.setup_api.SetupServer)
+        route = B.ui_language.ROUTE
+        settings = file.with_name('settings.json')
+        settings.write_bytes(b'{"library":"/path/to/library"}\n')
+        before = settings.read_bytes()
+        self.assertEqual(json.loads(call(setup, 'GET', route, key).body), {'language': None})
+        self.assertEqual(call(setup, 'POST', route, key, b'{"language":"es-419"}').status, 200)
+        for _ in range(2):  # a newly launched library bridge, including after a folder switch
+            _, library, new_key = self.language_bridge(file=file)
+            self.assertEqual(call(library, 'GET', route, key).status, 403)
+            self.assertEqual(json.loads(call(library, 'GET', route, new_key).body), {'language': 'es-419'})
+        self.assertEqual(settings.read_bytes(), before)
+
+    def test_language_file_recovers_from_corruption_and_failed_replace(self):
+        file, b, key = self.language_bridge()
+        route = B.ui_language.ROUTE
+        for data in (b'\xff', b'{"language":"es-ES"}', b'{"language":"es-419","language":"en"}', b' ' * 129):
+            file.write_bytes(data)
+            self.assertEqual(json.loads(call(b, 'GET', route, key).body), {'language': None})
+            self.assertEqual(file.read_bytes(), data)
+        self.assertEqual(call(b, 'POST', route, key, b'{"language":"es-419"}').status, 200)
+        with patch.object(B.ui_language.os, 'replace', side_effect=PermissionError('cannot replace')):
+            r = call(b, 'POST', route, key, b'{"language":"en"}')
+        self.assertEqual(r.status, 500)
+        self.assertEqual(json.loads(call(b, 'GET', route, key).body), {'language': 'es-419'})
+        self.assertEqual(list(file.parent.iterdir()), [file])
+
+    def test_language_concurrent_windows_commit_in_replacement_order(self):
+        file, first, first_key = self.language_bridge()
+        _, second, second_key = self.language_bridge(file=file)
+        route = B.ui_language.ROUTE
+        replace = os.replace
+        arrived, release = threading.Event(), threading.Event()
+        replies = []
+
+        def replace_language(src, dst):
+            if Path(dst) == file and json.loads(Path(src).read_bytes()) == {'language': 'es-419'}:
+                arrived.set()
+                if not release.wait(5):
+                    raise TimeoutError('test did not release the first write')
+            replace(src, dst)
+
+        def first_save():
+            replies.append(call(first, 'POST', route, first_key, b'{"language":"es-419"}').status)
+
+        with patch.object(B.ui_language.os, 'replace', side_effect=replace_language):
+            worker = threading.Thread(target=first_save)
+            worker.start()
+            try:
+                self.assertTrue(arrived.wait(5))
+                self.assertEqual(call(second, 'POST', route, second_key, b'{"language":"en"}').status, 200)
+                self.assertEqual(json.loads(call(first, 'GET', route, first_key).body), {'language': 'en'})
+            finally:
+                release.set()
+                worker.join(6)
+        self.assertEqual(replies, [200])
+        self.assertEqual(json.loads(call(second, 'GET', route, second_key).body), {'language': 'es-419'})
+        self.assertEqual(list(file.parent.iterdir()), [file])
+
+    def test_language_interrupted_write_and_nonregular_objects(self):
+        file, b, key = self.language_bridge()
+        route = B.ui_language.ROUTE
+        file.mkdir()
+        self.assertEqual(json.loads(call(b, 'GET', route, key).body), {'language': None})
+        self.assertEqual(call(b, 'POST', route, key, b'{"language":"en"}').status, 500)
+        self.assertEqual(list(file.parent.iterdir()), [file])
+        file.rmdir()
+        if hasattr(os, 'mkfifo'):
+            os.mkfifo(file)
+            self.assertEqual(json.loads(call(b, 'GET', route, key, timeout=3).body), {'language': None})
+            file.unlink()
+        saved = b'{"language":"es-419"}'
+        file.write_bytes(saved)
+        orphan = file.with_name('.ui-language-interrupted')
+        orphan.write_bytes(b'{"language":')
+        self.assertEqual(json.loads(call(b, 'GET', route, key).body), {'language': 'es-419'})
+        with patch.object(B.ui_language.os, 'fsync', side_effect=OSError('interrupted write')):
+            self.assertEqual(call(b, 'POST', route, key, b'{"language":"en"}').status, 500)
+        self.assertEqual(file.read_bytes(), saved)
+        self.assertEqual(set(file.parent.iterdir()), {file, orphan})
+
+    @unittest.skipUnless(os.name == 'posix', 'symlink test uses POSIX file semantics')
+    def test_language_symlink_cannot_read_or_overwrite_another_file(self):
+        file, b, key = self.language_bridge()
+        other = file.with_name('settings.json')
+        other.write_bytes(b'{"language":"es-419"}')
+        file.symlink_to(other)
+        route = B.ui_language.ROUTE
+        self.assertEqual(json.loads(call(b, 'GET', route, key).body), {'language': None})
+        self.assertEqual(call(b, 'POST', route, key, b'{"language":"en"}').status, 200)
+        self.assertFalse(file.is_symlink())
+        self.assertEqual(other.read_bytes(), b'{"language":"es-419"}')
+        self.assertEqual(json.loads(call(b, 'GET', route, key).body), {'language': 'en'})
 
     # ---- Range forms on video
     def check_slice(self, r, start, end, size=A_SIZE):

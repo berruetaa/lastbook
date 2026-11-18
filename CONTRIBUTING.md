@@ -16,7 +16,7 @@ The README explains the layout and how to build the apps.
 ## Test
 
 ```bash
-python3 -B -m unittest app.tests.test_readable app.tests.test_bridge app.tests.test_setup app.tests.test_data_folder app.tests.test_what_ships app.tests.test_update app.tests.test_address_search app.tests.test_topic_search app.tests.test_chat_steps app.tests.test_validate_topics app.tests.test_libq app.tests.test_shell_macos
+python3 -B -m unittest app.tests.test_readable app.tests.test_bridge app.tests.test_setup app.tests.test_data_folder app.tests.test_what_ships app.tests.test_update app.tests.test_address_search app.tests.test_topic_search app.tests.test_chat_steps app.tests.test_validate_topics app.tests.test_libq app.tests.test_shell_macos app.tests.test_i18n_catalogs
 ```
 
 Run these before you open a pull request (`test_topic_search` needs Node and is skipped without it; `test_shell_macos` needs a Mac with PyObjC and is skipped elsewhere). If you change the packaging, also run the build for your platform: it ends
@@ -29,6 +29,12 @@ python3 tools/validate_topics.py --data /path/to/LastbookData      # or set LAST
 
 It reads the library's files directly and needs no server. `tools/libq.py` takes the same `--data` and finds and reads
 the page you mean to cite: `python3 tools/libq.py --data /path/to/LastbookData search "boil water"`.
+
+For translation changes, update the UTF-8 JSON in `translations/desktop/`. Run
+`python3 -B packaging/i18n_catalogs.py` and commit the two generated web
+assets. Run the localization engine tests with
+`node --test app/tests/i18n_core_test.cjs`. For web or packaging changes to
+this feature, see the browser and native checks. [Localization guide](docs/i18n.md)
 
 ## Rules that keep Lastbook what it is
 

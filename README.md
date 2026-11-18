@@ -127,7 +127,8 @@ so some of its paths and ports describe that setup. The desktop app does not use
 
 The builds write into `derived/app-build/` and refuse to finish if the package scan finds something that must not ship:
 test code, a network call outside setup's downloader, a web address in our own pages, or a word from the private list
-(see below). The builds also run the TLS roots gate.
+(see below). The builds also run the TLS roots gate and check that the packaged
+localization assets are present and up to date. [Localization guide](docs/i18n.md)
 
 **macOS (Apple Silicon, needs [uv](https://github.com/astral-sh/uv)):**
 
@@ -220,7 +221,7 @@ before running them. Their disposable test distro is named `LastbookTest`, with 
 ## Tests
 
 ```bash
-python3 -B -m unittest app.tests.test_bridge app.tests.test_setup app.tests.test_data_folder app.tests.test_what_ships app.tests.test_update app.tests.test_address_search app.tests.test_topic_search app.tests.test_chat_steps app.tests.test_validate_topics app.tests.test_libq
+python3 -B -m unittest app.tests.test_bridge app.tests.test_setup app.tests.test_data_folder app.tests.test_what_ships app.tests.test_update app.tests.test_address_search app.tests.test_topic_search app.tests.test_chat_steps app.tests.test_validate_topics app.tests.test_libq app.tests.test_i18n_catalogs
 ```
 
 `test_bridge` needs a data folder (`LASTBOOK_DATA`); the others run without a library. `packaging/test_pack_tools.py SAMPLE
