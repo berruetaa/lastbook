@@ -55,7 +55,7 @@
   }
 
   function signature(message, key, plural) {
-    if (typeof message !== "string" || /[{}]/.test(message.replace(variables, ""))) {
+    if (typeof message !== "string" || !message.trim() || /[{}]/.test(message.replace(variables, ""))) {
       throw new TypeError("Invalid text or placeholder in " + key);
     }
     return [...new Set([...message.matchAll(variables)]
@@ -84,7 +84,8 @@
           throw new TypeError("Inconsistent placeholders in " + key);
         }
       }
-      result.set(key, { forms, schema: "plural:" + expected });
+      const exact = [...forms.keys()].filter(form => form.startsWith("=")).sort().join(",");
+      result.set(key, { forms, schema: "plural:" + expected + ":" + exact });
     }
     return result;
   }
@@ -120,7 +121,7 @@
     const routes = table(fallbacks, "fallbacks", fallbackEntries);
     const defaultLocale = canonical(fallbackLocale);
     const reference = messages.get(defaultLocale);
-    if (!reference) throw new TypeError("Missing fallback catalog: " + defaultLocale);
+    if (!reference?.size) throw new TypeError("Missing fallback catalog: " + defaultLocale);
 
     // English/reference messages establish stable keys and placeholder contracts.
     for (const [tag, catalog] of messages) {
@@ -201,6 +202,7 @@
     setLocale(locale);
     return Object.freeze({
       get locale() { return selected; },
+      get catalogLocale() { return chain.find(tag => messages.get(tag)?.size) || defaultLocale; },
       get supportedLocales() { return Object.freeze([...messages.keys()]); },
       setLocale,
       chooseLocale,

@@ -47,15 +47,18 @@
         const provider = stored.get(element)?.get(key);
         const result = i18n.resolve(key, provider?.(element, key));
         if (!result) continue;  // Original English remains readable.
-        if (target === null) element.textContent = result.text;
-        else element.setAttribute(target, result.text);
+        if (target === null) {
+          if (element.textContent !== result.text) element.textContent = result.text;
+        } else if (element.getAttribute(target) !== result.text) element.setAttribute(target, result.text);
         if (!language) language = result.locale;
       }
       // An attribute on a container must not change its unmarked descendants'
-      // language/direction. Prefer a marked leaf for mixed-language controls.
-      if (language && element.childElementCount === 0) {
-        element.setAttribute("lang", language);
-        element.setAttribute("dir", i18n.direction(language));
+      // language/direction unless the container explicitly opts in (e.g. an
+      // icon-only button). In mixed-language controls use marked leaves.
+      if (language && (element.childElementCount === 0 || element.getAttribute("data-i18n-lang") !== null)) {
+        const dir = i18n.direction(language);
+        if (element.getAttribute("lang") !== language) element.setAttribute("lang", language);
+        if (element.getAttribute("dir") !== dir) element.setAttribute("dir", dir);
       }
     }
   }
