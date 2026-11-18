@@ -1,0 +1,61 @@
+name: Native i18n portability preflight
+
+on:
+  push:
+    branches: [ci/native-i18n-validation]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  portability:
+    name: ${{ matrix.os }} / i18n portability
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate source catalogues and generated scripts
+        run: python -I -B packaging/i18n_catalogs.py --check
+      - name: Run catalogue and staging tests
+        run: python -B -m unittest app.tests.test_i18n_catalogs -v
+      - name: Test dependency-free i18n engine
+        run: node --test app/tests/i18n_core_test.cjs
+      - name: Stage the actual shipping web assets
+        run: |
+          python -I -B packaging/ship_app_files.py "${{ runner.temp }}/lastbook-i18n-stage"
+          python -I -B packaging/i18n_catalogs.py --check --web-dir "${{ runner.temp }}/lastbook-i18n-stage/web"
+      - name: Validate build script syntax
+        run: |
+          bash -n packaging/build_app_windows.sh
+          bash -n packaging/build_setup_windows.sh
+          bash -n packaging/build_app_macos.sh
+      - name: Save staged web assets
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staged-web-${{ matrix.os }}
+          path: ${{ runner.temp }}/lastbook-i18n-stage/web/
+          if-no-files-found: ignore
+          retention-days: 7
+
+# This is a cross-platform preflight, NOT a native WebView2/WKWebView
+# installation or GUI smoke test. Native packaging depends on pinned
+# WebView2 DLLs, an LLM binary, release manifests, and Apple Silicon.
+# Add those as separate jobs only with verified, reproducible inputs.
