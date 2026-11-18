@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Offline i18n DOM test</title>
+<script src="../../web/i18n-core.js"></script>
+<script src="../../web/i18n-dom.js"></script>
+<script src="../../web/i18n-example-catalogs.js"></script>
+<button data-i18n="setup.open" data-i18n-aria-label="setup.open">
+  <svg aria-hidden="true"><path d="M0,0 L1,1"></path></svg>
+  <span data-i18n="setup.open">Initial button text</span>
+</button>
+<input data-i18n-placeholder="setup.search" value="user input">
+<svg><text data-i18n="setup.open"><tspan data-i18n="setup.open">Initial SVG text</tspan></text></svg>
+<p data-i18n="setup.ready" data-i18n-title="setup.ready"></p>
+<p id="missing" data-i18n="unknown.key">Existing copy</p>
+<p id="user">User-authored content</p>
+<pre id="result">PENDING</pre>
+<script>
+  (() => {
+    const result = document.querySelector("#result");
+    try {
+      const catalogs = { ...i18nExampleCatalogs,
+        "es-419": { "setup.open": "Abrir biblioteca", "setup.ready": "Todo listo, {name}" } };
+      const i18n = createI18n({ catalogs, locale: "es-UY", fallbackLocale: "en",
+        fallbacks: { "es-UY": ["es-419"] } });
+      const payload = '<img src=x onerror="window.injected=1">';
+      const paramsFor = () => ({ name: payload });
+      const button = document.querySelector("button");
+      const svg = button.querySelector("svg");
+      const path = svg.querySelector("path");
+      const tspan = document.querySelector("tspan");
+      const input = document.querySelector("input");
+      const paragraph = document.querySelector('[data-i18n="setup.ready"]');
+      let clicks = 0;
+      path.addEventListener("click", () => clicks++);
+      function equal(actual, expected, label) {
+        if (actual !== expected) throw new Error(label + " failed");
+      }
+      applyI18n(button, i18n, paramsFor);
+      equal(button.getAttribute("aria-label"), "Abrir biblioteca", "marked root");
+      equal(input.hasAttribute("placeholder"), false, "scope");
+      applyI18n(document, i18n, paramsFor);
+      equal(svg, button.querySelector("svg"), "SVG identity");
+      equal(path, svg.querySelector("path"), "nested path identity");
+      path.dispatchEvent(new Event("click"));
+      equal(clicks, 1, "listener preserved");
+      equal(button.querySelector("span").textContent, "Abrir biblioteca", "marked leaf");
+      equal(tspan, document.querySelector("tspan"), "SVG tspan identity");
+      equal(tspan.textContent, "Abrir biblioteca", "SVG leaf translated");
+      equal(input.placeholder, "Search", "English fallback");
+      equal(input.value, "user input", "user input preserved");
+      equal(paragraph.textContent, "Todo listo, " + payload, "literal HTML");
+      equal(paragraph.title, "Todo listo, " + payload, "literal attribute");
+      equal(paragraph.childElementCount, 0, "payload not executed");
+      equal(document.querySelector("#missing").textContent, "Existing copy", "missing key");
+      equal(document.querySelector("#user").textContent, "User-authored content", "unmarked content");
+
+      const observer = new MutationObserver(() => {});
+      observer.observe(document.body, { childList: true, characterData: true, attributes: true, subtree: true });
+      applyI18n(document, i18n, paramsFor);
+      equal(observer.takeRecords().length, 0, "idempotent apply");
+      observer.disconnect();
+
+      i18n.setLocale("en");
+      applyI18n(document, i18n, paramsFor);
+      equal(button.getAttribute("aria-label"), "Open library", "locale change");
+      equal(svg, button.querySelector("svg"), "identity after locale change");
+      result.textContent = "PASS";
+    } catch (error) {
+      result.textContent = "FAIL " + error.message;
+    }
+  })();
+</script>
+</html>
