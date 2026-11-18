@@ -28,7 +28,8 @@ test("canonical tags, explicit regional routes, exact matches and English fallba
 });
 
 test("script-aware parents, Unicode extensions, cycles and missing keys", () => {
-  const catalogs = { ...examples, "zh-Hant": { search: "搜尋" }, zh: { search: "搜索" } };
+  const catalogs = { ...examples, en: { ...examples.en, search: "Search" },
+    "zh-Hant": { search: "搜尋" }, zh: { search: "搜索" } };
   const i18n = engine("zh-Hant-TW-u-nu-hanidec", catalogs, {
     "zh-Hant-TW": ["zh-Hant"], "zh-Hant": ["zh-Hant-TW"],
   });
@@ -42,7 +43,8 @@ test("Arabic cardinal categories, exact cases and grammar of the matched catalog
   const arabic = {
     zero: "zero", one: "one", two: "two", few: "few", many: "many", other: "other", "=42": "exact",
   };
-  const i18n = engine("ar", { ...examples, ar: { plural: arabic } });
+  const i18n = engine("ar", { ...examples, en: { ...examples.en, plural: { other: "other" } },
+    ar: { plural: arabic } });
   const cases = [[0, "zero"], [1, "one"], [2, "two"], [3, "few"], [11, "many"], [100, "other"],
     [1.5, "other"], [42, "exact"]];
   for (const [count, expected] of cases) assert.equal(i18n.t("plural", { count }), expected);
@@ -71,4 +73,58 @@ test("plain messages work without plural support and plural use reports the capa
   } finally {
     Object.defineProperty(Intl, "PluralRules", descriptor);
   }
+});
+
+test("regional fallback policy, exact exceptions and resolved source locales", () => {
+  const i18n = createI18n({ catalogs: examples, locale: "es-MX", fallbackLocale: "en",
+    regionFallbacks: { es: ["es-419"] }, fallbacks: { "es-ES": [] } });
+  for (const locale of ["es-UY", "es-MX", "es-AR", "es-CL", "es-CL-u-nu-latn"]) {
+    i18n.setLocale(locale);
+    assert.deepEqual(i18n.resolve("setup.open"), { text: "Abrir biblioteca", locale: "es-419" });
+  }
+  for (const locale of ["es-ES", "es"]) {
+    i18n.setLocale(locale);
+    assert.deepEqual(i18n.resolve("setup.open"), { text: "Open library", locale: "en" });
+  }
+  assert.equal(i18n.resolve("missing"), undefined);
+  assert.equal(i18n.t("setup.ready", null), "Ready, {name}");
+  assert.equal(i18n.t("setup.files", { count: 1234.5 }), "1234.5 files");
+});
+
+test("rejects malformed community catalogs and locale policy before first render", () => {
+  const badCatalogs = [
+    { stray: "Unexpected" },
+    { "setup.ready": "Hola {nombre}" },
+    { "setup.ready": "Hola {name" },
+    { "setup.open": "{ name }" },
+    { "setup.open": null },
+    { "setup.files": { one: "Uno" } },
+    { "setup.files": { one: "Uno", other: 5 } },
+    { "setup.files": { other: "{count}", two: "{person}" } },
+    { "setup.files": { other: "{count}", typo: "Oops" } },
+    { "setup.files": { other: "{count}", "=1.0": "Uno" } },
+    Object.create({ "setup.open": "Inherited" }),
+    { get "setup.open"() { assert.fail("catalog getter ran"); } },
+    { [Symbol("stray")]: "Unexpected" },
+  ];
+  for (const catalog of badCatalogs) assert.throws(() => engine("en", { ...examples, es: catalog }), TypeError);
+  assert.throws(() => engine("en", { EN: {}, en: {} }), RangeError);
+  assert.throws(() => engine("en", { es: {} }), /Missing reference catalog/);
+  assert.throws(() => engine("en", examples, { "es-UY": "es-419" }), TypeError);
+  assert.throws(() => engine("en", examples, { "es-UY": ["bad_tag"] }), RangeError);
+  assert.throws(() => createI18n({ catalogs: examples, locale: "en", fallbackLocale: "en",
+    regionFallbacks: { "es-UY": ["es-419"] } }), TypeError);
+});
+
+test("catalog and routing snapshots ignore later changes", () => {
+  const en = Object.assign(Object.create(null), examples.en);
+  const es = { "setup.files": { other: "{count} archivos" } };
+  const routes = { "es-UY": ["es-419"] };
+  const i18n = engine("es-UY", { en, "es-419": es }, routes);
+  en["setup.open"] = "Changed";
+  es["setup.files"].other = "Changed";
+  routes["es-UY"][0] = "en";
+  i18n.setLocale("es-UY");
+  assert.equal(i18n.t("setup.files", { count: 3 }), "3 archivos");
+  assert.equal(i18n.t("setup.open"), "Open library");
 });
