@@ -12,12 +12,18 @@ on:
         description: 'Download and build the pinned Windows LLM toolchain (up to 20 minutes)'
         type: boolean
         default: false
+      packaged_macos_run_id:
+        description: 'Optional successful build run ID: inspect its compiled macOS app instead'
+        type: string
+        default: ''
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   native:
+    if: ${{ inputs.packaged_macos_run_id == '' }}
     name: ${{ matrix.os }} / native desktop and official build
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -134,5 +140,52 @@ jobs:
             evidence/native/run/*.json
             evidence/native/run/*.png
             evidence/native/run/settings/ui-language.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  packaged_macos:
+    if: ${{ inputs.packaged_macos_run_id != '' }}
+    name: macos-15 / packaged app inspection
+    runs-on: macos-15
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.13.9'
+          enable-cache: false
+      - name: Download the app built by the selected run
+        uses: actions/download-artifact@v8
+        with:
+          name: native-i18n-macos-15
+          run-id: ${{ inputs.packaged_macos_run_id }}
+          github-token: ${{ github.token }}
+          path: downloaded
+      - name: Verify bundle and prepare inspection tools
+        run: |
+          mkdir -p evidence packaged
+          shasum -a 256 downloaded/Lastbook-macos.zip | tee evidence/bundle-sha256.txt
+          ditto -x -k downloaded/Lastbook-macos.zip packaged
+          codesign --verify --deep --strict packaged/Lastbook.app
+          uv venv --seed --python 3.11.18 "$RUNNER_TEMP/lastbook-probe"
+          uv pip install --python "$RUNNER_TEMP/lastbook-probe/bin/python" pyobjc-core==13.0 pyobjc-framework-Cocoa==13.0
+      - name: Inspect the compiled app in the native user session
+        run: |
+          "$RUNNER_TEMP/lastbook-probe/bin/python" -u -B app/tests/mac_packaged_probe.py packaged/Lastbook.app evidence/packaged 2>&1 | tee evidence/packaged-probe.log
+      - name: Save packaged-app evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: native-i18n-packaged-macos
+          path: |
+            evidence/*.txt
+            evidence/*.log
+            evidence/packaged/*.json
+            evidence/packaged/*.txt
+            evidence/packaged/*.png
+            evidence/packaged/LastbookData/derived/logs/*.log
           if-no-files-found: warn
           retention-days: 7

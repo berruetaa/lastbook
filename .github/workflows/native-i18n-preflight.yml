@@ -7,6 +7,7 @@ on:
       - '.github/workflows/native-i18n-desktop.yml'
       - 'app/tests/native_i18n_smoke.py'
       - 'app/tests/prepare_webview2.py'
+      - 'app/tests/mac_packaged_probe.py'
       - '.github/scripts/prepare_windows_llm.py'
   workflow_dispatch:
 
