@@ -8,6 +8,10 @@ on:
         type: choice
         options: [both, windows, macos]
         default: both
+      build_windows_llm:
+        description: 'Download and build the pinned Windows LLM toolchain (up to 20 minutes)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -55,12 +59,23 @@ jobs:
           mkdir -p derived/release
           curl --fail --location --retry 2 --max-time 60 https://downloads.lastbook.org/manifest-v1.json -o derived/release/manifest-v1.json
           python -B -c "import json;from engine.setup.manifest import validate;d=json.load(open('derived/release/manifest-v1.json',encoding='utf-8'));assert validate(d) and any(p.get('id')=='small' and p.get('files') for p in d['packs']);print('Published manifest passes project validation and contains Small')" | tee evidence/manifest.txt
+      - name: Prepare pinned Windows LLM build tools
+        if: always() && runner.os == 'Windows' && inputs.build_windows_llm
+        run: python -u -B .github/scripts/prepare_windows_llm.py "$RUNNER_TEMP/lastbook-tools" 2>&1 | tee evidence/windows-tools.log
+      - name: Build pinned Windows LLM runner
+        if: always() && runner.os == 'Windows' && inputs.build_windows_llm
+        run: |
+          export TOOLS="$(cygpath -w "$RUNNER_TEMP/lastbook-tools")"
+          python -u -c "import subprocess,sys; p=subprocess.run(['bash','packaging/llm/build_llm_windows.sh'],timeout=1200);sys.exit(p.returncode)" 2>&1 | tee evidence/build-llm-windows.log
       - name: Attempt official Windows app build
+        id: build_windows
         if: always() && runner.os == 'Windows'
         run: |
           echo 'Checking official LLM build prerequisites:' | tee evidence/build-windows.log
           ls /c/Windows/System32/vulkan-1.dll 2>&1 | tee -a evidence/build-windows.log || true
-          (bash packaging/llm/build_llm_windows.sh) 2>&1 | tee -a evidence/build-windows.log || true
+          if [[ "${{ inputs.build_windows_llm }}" != "true" ]]; then
+            (bash packaging/llm/build_llm_windows.sh) 2>&1 | tee -a evidence/build-windows.log || true
+          fi
           export PY="$(command -v python)"
           export WEBVIEW2="$(cygpath -w "$PWD/app/webview2")"
           export OUT="$(cygpath -w "$RUNNER_TEMP/lastbook-official-build")"
@@ -84,6 +99,12 @@ jobs:
           else
             if [[ -f "$RUNNER_TEMP/lastbook-official-build/package-scan.json" ]]; then
               cp "$RUNNER_TEMP/lastbook-official-build/package-scan.json" evidence/
+            fi
+            for f in derived/llm/cmake-win.log derived/llm/build-win.log derived/llm/bin-win/SHA256SUMS.txt; do
+              [[ ! -f "$f" ]] || cp "$f" evidence/
+            done
+            if [[ "${{ steps.build_windows.outcome }}" == "success" ]]; then
+              python -c "import shutil,os;shutil.make_archive('evidence/Lastbook-windows','zip',os.path.join(os.environ['RUNNER_TEMP'],'lastbook-official-build','dist'),'Lastbook')"
             fi
           fi
       - name: Save logs, reports and screenshots

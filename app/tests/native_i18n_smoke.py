@@ -39,6 +39,7 @@ def child(phase, work, staged):
     settings.mkdir(parents=True, exist_ok=True)
     (data / 'library-data').mkdir(parents=True, exist_ok=True)
     (data / 'library-data' / 'catalog.json').write_text('[]', encoding='utf-8')
+    (data / 'library-data' / 'summary.json').write_text('{"resources": 0}', encoding='utf-8')
     if phase == 'library':
         os.environ['LASTBOOK_DATA'] = str(data)
     import main
