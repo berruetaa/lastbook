@@ -16,6 +16,9 @@ import traceback
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='backslashreplace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='backslashreplace')
 
 
 def emit(message):
@@ -77,7 +80,8 @@ def child(phase, work, staged):
                 time.sleep(.05)
             if not task.IsCompleted or task.IsFaulted:
                 raise RuntimeError('WebView2 ExecuteScriptAsync failed or timed out')
-            return json.loads(json.loads(str(task.Result)))
+            value = json.loads(str(task.Result))
+            return None if value is None else json.loads(value)
 
         def screenshot(path):
             q = queue.Queue()
@@ -127,7 +131,7 @@ def child(phase, work, staged):
             result, error = q.get(timeout=15)
             if error:
                 raise RuntimeError(str(error))
-            return json.loads(str(result))
+            return None if result is None else json.loads(str(result))
 
         def screenshot(path):
             q = queue.Queue()
@@ -166,6 +170,14 @@ def child(phase, work, staged):
             time.sleep(.3)
         raise AssertionError(f'{label}: expected {expected!r}, last {last!r}')
 
+    def watch_errors():
+        evaluate("(()=>{window.__ciErrors=[];addEventListener('error',e=>window.__ciErrors.push(e.message));addEventListener('unhandledrejection',e=>window.__ciErrors.push(String(e.reason)));return true})()")
+
+    def check_errors():
+        errors = evaluate('window.__ciErrors || []')
+        if errors:
+            raise AssertionError(f'JavaScript errors after instrumentation: {errors}')
+
     def run_checks():
         result = {'phase': phase, 'passed': False, 'platform': sys.platform}
         try:
@@ -175,6 +187,7 @@ def child(phase, work, staged):
             emit('Native WebView initialized; waiting for page')
             if phase in ('setup', 'restart'):
                 wait("!!document.querySelector('#languageSettings:not([hidden])')", True, 'language preference loaded')
+                watch_errors()
                 if phase == 'setup':
                     wait("document.querySelector('#interfaceLanguage').value", 'en', 'English default')
                     wait("document.querySelector('#main h1')?.textContent.trim()", 'Set up Lastbook', 'English setup')
@@ -186,17 +199,23 @@ def child(phase, work, staged):
                 assert json.loads((settings / 'ui-language.json').read_text(encoding='utf-8')) == {'language': 'es-419'}
             else:
                 wait("document.querySelector('[data-nav=guides] span')?.textContent.trim()", 'Guías', 'Spanish in library')
+                watch_errors()
                 wait("!!document.querySelector('#sideSettings:not([hidden])')", True, 'Settings navigation available')
+                check_errors()
                 evaluate("(()=>{document.querySelector('#sideSettings').click();return true})()")
                 wait("document.querySelector('#main h1')?.textContent.trim()", 'Biblioteca e IA local', 'Spanish settings')
+                watch_errors()
                 wait("!!document.querySelector('#languageSettings:not([hidden])')", True, 'Settings language loaded')
                 wait("document.querySelector('#interfaceLanguage').value", 'es-419', 'Spanish selected in Settings')
                 evaluate("(()=>{document.querySelector('#interfaceLanguage').value='en';document.querySelector('#languageSettings button').click();return true})()")
                 wait("document.querySelector('#languageStatus').textContent.trim()", 'Language saved.', 'English saved in Settings')
                 wait("document.querySelector('#main h1')?.textContent.trim()", 'Library and local AI', 'English settings')
                 assert json.loads((settings / 'ui-language.json').read_text(encoding='utf-8')) == {'language': 'en'}
+                check_errors()
                 evaluate("(()=>{document.querySelector('#sBack').click();return true})()")
                 wait("document.querySelector('[data-nav=guides] span')?.textContent.trim()", 'Guides', 'return to English library')
+                watch_errors()
+            check_errors()
             try:
                 screenshot(work / (phase + '.png'))
                 emit('Screenshot captured for ' + phase)
@@ -231,13 +250,15 @@ def parent(out):
         log = out / (phase + '.log')
         with log.open('w', encoding='utf-8') as f:
             try:
-                p = subprocess.run([sys.executable, '-u', '-B', __file__, '--child', phase, str(work), str(staged)], stdout=f, stderr=subprocess.STDOUT, timeout=125)
+                p = subprocess.run([sys.executable, '-u', '-B', __file__, '--child', phase, str(work), str(staged)], stdout=f, stderr=subprocess.STDOUT, timeout=125,
+                                   env={**os.environ, 'PYTHONIOENCODING': 'utf-8'})
                 code = p.returncode
             except subprocess.TimeoutExpired:
                 code = 'timeout'
-        emit(log.read_text(encoding='utf-8', errors='replace'))
+        output = log.read_text(encoding='utf-8', errors='replace')
+        emit(output)
         report = work / (phase + '.json')
-        if not report.exists() or not json.loads(report.read_text(encoding='utf-8')).get('passed') or code != 0:
+        if not report.exists() or not json.loads(report.read_text(encoding='utf-8')).get('passed') or code != 0 or 'Traceback (most recent call last):' in output:
             raise SystemExit(f'{phase} failed: exit={code}; report={report.exists()}')
     emit('Native source-shell i18n smoke PASSED; scripted DOM actions, staged assets.')
 

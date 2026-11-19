@@ -3,6 +3,10 @@ name: Native i18n portability preflight
 on:
   push:
     branches: [ci/native-i18n-validation]
+    paths-ignore:
+      - '.github/workflows/native-i18n-desktop.yml'
+      - 'app/tests/native_i18n_smoke.py'
+      - 'app/tests/prepare_webview2.py'
   workflow_dispatch:
 
 permissions:
