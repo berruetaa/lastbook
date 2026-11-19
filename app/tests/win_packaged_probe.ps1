@@ -110,8 +110,12 @@ function Probe([string]$Language, [string]$Expected) {
   } finally {
     $p.Refresh()
     if (-not $p.HasExited) {
-      [void]$p.CloseMainWindow()
-      if (-not $p.WaitForExit(10000)) { $p.Kill(); $p.WaitForExit() }
+      $closed = $p.CloseMainWindow()
+      $exited = $p.WaitForExit(10000)
+      if (-not $exited) { $p.Kill(); $p.WaitForExit() }
+      $row.graceful_close = $closed -and $exited -and $p.ExitCode -eq 0
+    } else {
+      $row.graceful_close = $false
     }
   }
 }
@@ -121,7 +125,7 @@ try {
 } finally {
   [IO.File]::WriteAllText((Join-Path $Out 'packaged-report.json'),($report | ConvertTo-Json -Depth 6),$utf8)
 }
-if (@($report | Where-Object { -not $_.alive -or -not $_.rendered }).Count -gt 0) {
+if (@($report | Where-Object { -not $_.alive -or -not $_.rendered -or -not $_.graceful_close }).Count -gt 0) {
   throw 'Packaged app did not expose the expected UI Automation labels.'
 }
 if (-not $report[0].spanish_saved_by_ui) { throw 'Packaged app did not save Spanish through UI Automation.' }
