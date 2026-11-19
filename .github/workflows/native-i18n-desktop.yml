@@ -1,0 +1,245 @@
+name: Native i18n desktop evidence
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Platform to validate'
+        type: choice
+        options: [both, windows, macos]
+        default: both
+      build_windows_llm:
+        description: 'Build the Windows LLM runner and official app (LLM build up to 20 minutes)'
+        type: boolean
+        default: false
+      build_macos:
+        description: 'Build the macOS LLM runner and official app (LLM build up to 20 minutes)'
+        type: boolean
+        default: false
+      packaged_macos_run_id:
+        description: 'Optional successful build run ID: inspect its compiled macOS app instead'
+        type: string
+        default: ''
+      packaged_windows_run_id:
+        description: 'Optional successful build run ID: inspect its compiled Windows app instead'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  invalid_inputs:
+    if: ${{ inputs.packaged_macos_run_id != '' && inputs.packaged_windows_run_id != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'Choose only one packaged build run ID.' >&2; exit 1
+
+  native:
+    if: ${{ inputs.packaged_macos_run_id == '' && inputs.packaged_windows_run_id == '' }}
+    name: ${{ matrix.os }} / native desktop
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.platform == 'windows' && '[{"os":"windows-2025","python":"3.14.10","requirements":"packaging/requirements_app.txt"}]' || inputs.platform == 'macos' && '[{"os":"macos-15","python":"3.11.18","requirements":"packaging/requirements_macos.txt"}]' || '[{"os":"windows-2025","python":"3.14.10","requirements":"packaging/requirements_app.txt"},{"os":"macos-15","python":"3.11.18","requirements":"packaging/requirements_macos.txt"}]') }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+      - name: Create evidence folder
+        run: mkdir -p evidence
+      - uses: actions/setup-python@v6
+        if: runner.os == 'Windows'
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@v7
+        if: runner.os == 'macOS'
+        with:
+          version: '0.13.9'
+          enable-cache: false
+      - name: Prepare pinned macOS Python with uv
+        if: runner.os == 'macOS'
+        run: |
+          uv venv --seed --python '${{ matrix.python }}' "$RUNNER_TEMP/lastbook-native-venv"
+          echo "$RUNNER_TEMP/lastbook-native-venv/bin" >> "$GITHUB_PATH"
+      - name: Describe host and user session
+        run: |
+          mkdir -p evidence
+          python --version | tee evidence/python.txt
+          python -c "import platform;print(platform.platform());print(platform.machine())" | tee evidence/platform.txt
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            sw_vers | tee evidence/system.txt
+            who | tee evidence/session.txt
+            system_profiler SPDisplaysDataType | head -80 | tee evidence/display.txt
+          else
+            powershell.exe -NoProfile -Command 'Get-Process -Id $PID | Select-Object Id,SessionId; quser; Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\*" -ErrorAction SilentlyContinue | Where-Object { $_.name -match "WebView2" } | Select-Object name,pv' 2>&1 | tee evidence/session.txt || true
+          fi
+      - name: Install pinned product dependencies
+        run: |
+          python -m pip install --only-binary=:all: -r "${{ matrix.requirements }}"
+      - name: Prepare and verify WebView2 SDK
+        if: runner.os == 'Windows'
+        run: python -B app/tests/prepare_webview2.py | tee evidence/webview2-sdk.txt
+      - name: Run native source-shell i18n smoke
+        run: python -u -B app/tests/native_i18n_smoke.py evidence/native 2>&1 | tee evidence/native-smoke.log
+      - name: Obtain published release manifest and validate it
+        if: always() && ((runner.os == 'Windows' && inputs.build_windows_llm) || (runner.os == 'macOS' && inputs.build_macos))
+        run: |
+          mkdir -p derived/release
+          curl --fail --location --retry 2 --max-time 60 https://downloads.lastbook.org/manifest-v1.json -o derived/release/manifest-v1.json
+          python -B -c "import json;from engine.setup.manifest import validate;d=json.load(open('derived/release/manifest-v1.json',encoding='utf-8'));assert validate(d) and any(p.get('id')=='small' and p.get('files') for p in d['packs']);print('Published manifest passes project validation and contains Small')" | tee evidence/manifest.txt
+      - name: Prepare pinned Windows LLM build tools
+        if: always() && runner.os == 'Windows' && inputs.build_windows_llm
+        run: python -u -B .github/scripts/prepare_windows_llm.py "$RUNNER_TEMP/lastbook-tools" 2>&1 | tee evidence/windows-tools.log
+      - name: Build pinned Windows LLM runner
+        if: always() && runner.os == 'Windows' && inputs.build_windows_llm
+        run: |
+          export TOOLS="$(cygpath -w "$RUNNER_TEMP/lastbook-tools")"
+          export GIT_BASH="$(cygpath -w "$(command -v bash)")"
+          python -u -c "import os,subprocess,sys; p=subprocess.run([os.environ['GIT_BASH'],'packaging/llm/build_llm_windows.sh'],timeout=1200);sys.exit(p.returncode)" 2>&1 | tee evidence/build-llm-windows.log
+      - name: Attempt official Windows app build
+        id: build_windows
+        if: always() && runner.os == 'Windows' && inputs.build_windows_llm
+        run: |
+          echo 'Checking official LLM build prerequisites:' | tee evidence/build-windows.log
+          ls /c/Windows/System32/vulkan-1.dll 2>&1 | tee -a evidence/build-windows.log || true
+          export PY="$(command -v python)"
+          export WEBVIEW2="$(cygpath -w "$PWD/app/webview2")"
+          export OUT="$(cygpath -w "$RUNNER_TEMP/lastbook-official-build")"
+          bash packaging/build_app_windows.sh 2>&1 | tee -a evidence/build-windows.log
+      - name: Build pinned macOS LLM runner
+        if: always() && runner.os == 'macOS' && inputs.build_macos
+        run: |
+          python -u -c "import subprocess,sys; f=open('evidence/build-llm.log','w'); p=subprocess.run(['bash','packaging/llm/build_llm_macos.sh'],stdout=f,stderr=subprocess.STDOUT,timeout=1200); f.close(); print(open('evidence/build-llm.log').read());sys.exit(p.returncode)"
+      - name: Attempt official macOS app build
+        if: always() && runner.os == 'macOS' && inputs.build_macos
+        run: bash packaging/build_app_macos.sh 2>&1 | tee evidence/build-macos.log
+      - name: Collect build logs and scans
+        if: always()
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            find derived/app-build/mac -type f \( -name 'build.log' -o -name 'scan.txt' \) -exec cp {} evidence/ \; 2>/dev/null || true
+            if [[ -d derived/app-build/mac/Lastbook.app ]]; then
+              ditto -c -k --sequesterRsrc --keepParent derived/app-build/mac/Lastbook.app evidence/Lastbook-macos.zip
+            fi
+          else
+            if [[ -f "$RUNNER_TEMP/lastbook-official-build/package-scan.json" ]]; then
+              cp "$RUNNER_TEMP/lastbook-official-build/package-scan.json" evidence/
+            fi
+            for f in derived/llm/cmake-win.log derived/llm/build-win.log derived/llm/bin-win/SHA256SUMS.txt; do
+              [[ ! -f "$f" ]] || cp "$f" evidence/
+            done
+            if [[ "${{ steps.build_windows.outcome }}" == "success" ]]; then
+              python -c "import shutil,os;shutil.make_archive('evidence/Lastbook-windows','zip',os.path.join(os.environ['RUNNER_TEMP'],'lastbook-official-build','dist'),'Lastbook')"
+            fi
+          fi
+      - name: Save logs, reports and screenshots
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: native-i18n-${{ matrix.os }}
+          path: |
+            evidence/*.txt
+            evidence/*.log
+            evidence/*.json
+            evidence/*.zip
+            evidence/native/*.log
+            evidence/native/run/*.json
+            evidence/native/run/*.png
+            evidence/native/run/settings/ui-language.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  packaged_macos:
+    if: ${{ inputs.packaged_macos_run_id != '' && inputs.packaged_windows_run_id == '' }}
+    name: macos-15 / packaged app inspection
+    runs-on: macos-15
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: '0.13.9'
+          enable-cache: false
+      - name: Download the app built by the selected run
+        uses: actions/download-artifact@v8
+        with:
+          name: native-i18n-macos-15
+          run-id: ${{ inputs.packaged_macos_run_id }}
+          github-token: ${{ github.token }}
+          path: downloaded
+      - name: Verify bundle and prepare inspection tools
+        run: |
+          mkdir -p evidence packaged
+          shasum -a 256 downloaded/Lastbook-macos.zip | tee evidence/bundle-sha256.txt
+          ditto -x -k downloaded/Lastbook-macos.zip packaged
+          codesign --verify --deep --strict packaged/Lastbook.app
+          uv venv --seed --python 3.11.18 "$RUNNER_TEMP/lastbook-probe"
+          uv pip install --python "$RUNNER_TEMP/lastbook-probe/bin/python" pyobjc-core==13.0 pyobjc-framework-Cocoa==13.0
+      - name: Inspect the compiled app in the native user session
+        run: |
+          "$RUNNER_TEMP/lastbook-probe/bin/python" -u -B app/tests/mac_packaged_probe.py packaged/Lastbook.app evidence/packaged 2>&1 | tee evidence/packaged-probe.log
+      - name: Save packaged-app evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: native-i18n-packaged-macos
+          path: |
+            evidence/*.txt
+            evidence/*.log
+            evidence/packaged/*.json
+            evidence/packaged/*.txt
+            evidence/packaged/*.png
+            evidence/packaged/LastbookData/derived/logs/*.log
+          if-no-files-found: warn
+          retention-days: 7
+
+  packaged_windows:
+    if: ${{ inputs.packaged_windows_run_id != '' && inputs.packaged_macos_run_id == '' }}
+    name: windows-2025 / packaged app inspection
+    runs-on: windows-2025
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download the app built by the selected run
+        uses: actions/download-artifact@v8
+        with:
+          name: native-i18n-windows-2025
+          run-id: ${{ inputs.packaged_windows_run_id }}
+          github-token: ${{ github.token }}
+          path: downloaded
+      - name: Extract and hash the application
+        run: |
+          New-Item -ItemType Directory -Force evidence,packaged | Out-Null
+          Get-FileHash downloaded/Lastbook-windows.zip -Algorithm SHA256 | Out-String | Set-Content evidence/bundle-sha256.txt
+          Expand-Archive downloaded/Lastbook-windows.zip -DestinationPath packaged
+      - name: Inspect the compiled app in the native user session
+        run: |
+          $exe = (Resolve-Path packaged/Lastbook/Lastbook.exe).Path
+          & ./app/tests/win_packaged_probe.ps1 -Exe $exe -Out evidence/packaged 2>&1 | Tee-Object -FilePath evidence/packaged-probe.log
+          if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Save packaged-app evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: native-i18n-packaged-windows
+          path: |
+            evidence/*.txt
+            evidence/*.log
+            evidence/packaged/*.json
+            evidence/packaged/*.txt
+            evidence/packaged/*.png
+            evidence/packaged/LastbookData/derived/logs/*.log
+          if-no-files-found: warn
+          retention-days: 7
