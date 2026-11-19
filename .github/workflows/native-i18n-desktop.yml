@@ -16,6 +16,10 @@ on:
         description: 'Optional successful build run ID: inspect its compiled macOS app instead'
         type: string
         default: ''
+      packaged_windows_run_id:
+        description: 'Optional successful build run ID: inspect its compiled Windows app instead'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -23,7 +27,7 @@ permissions:
 
 jobs:
   native:
-    if: ${{ inputs.packaged_macos_run_id == '' }}
+    if: ${{ inputs.packaged_macos_run_id == '' && inputs.packaged_windows_run_id == '' }}
     name: ${{ matrix.os }} / native desktop and official build
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -144,7 +148,7 @@ jobs:
           retention-days: 7
 
   packaged_macos:
-    if: ${{ inputs.packaged_macos_run_id != '' }}
+    if: ${{ inputs.packaged_macos_run_id != '' && inputs.packaged_windows_run_id == '' }}
     name: macos-15 / packaged app inspection
     runs-on: macos-15
     timeout-minutes: 10
@@ -180,6 +184,48 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: native-i18n-packaged-macos
+          path: |
+            evidence/*.txt
+            evidence/*.log
+            evidence/packaged/*.json
+            evidence/packaged/*.txt
+            evidence/packaged/*.png
+            evidence/packaged/LastbookData/derived/logs/*.log
+          if-no-files-found: warn
+          retention-days: 7
+
+  packaged_windows:
+    if: ${{ inputs.packaged_windows_run_id != '' && inputs.packaged_macos_run_id == '' }}
+    name: windows-2025 / packaged app inspection
+    runs-on: windows-2025
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download the app built by the selected run
+        uses: actions/download-artifact@v8
+        with:
+          name: native-i18n-windows-2025
+          run-id: ${{ inputs.packaged_windows_run_id }}
+          github-token: ${{ github.token }}
+          path: downloaded
+      - name: Extract and hash the application
+        run: |
+          New-Item -ItemType Directory -Force evidence,packaged | Out-Null
+          Get-FileHash downloaded/Lastbook-windows.zip -Algorithm SHA256 | Out-String | Set-Content evidence/bundle-sha256.txt
+          Expand-Archive downloaded/Lastbook-windows.zip -DestinationPath packaged
+      - name: Inspect the compiled app in the native user session
+        run: |
+          $exe = (Resolve-Path packaged/Lastbook/Lastbook.exe).Path
+          & ./app/tests/win_packaged_probe.ps1 -Exe $exe -Out evidence/packaged 2>&1 | Tee-Object -FilePath evidence/packaged-probe.log
+          if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Save packaged-app evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: native-i18n-packaged-windows
           path: |
             evidence/*.txt
             evidence/*.log

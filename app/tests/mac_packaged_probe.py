@@ -60,6 +60,17 @@ def run(language, expected):
         row['alive'] = proc.poll() is None
         row['expected'] = expected
         (out / (row['language'] + '-ax.txt')).write_text(nodes_text, encoding='utf-8')
+        if language is None and row['rendered']:
+            pressed = mac_ax.press(mac_ax.tree(proc.pid), 'Settings')
+            row['settings_press'] = pressed
+            end = time.monotonic() + 25
+            while time.monotonic() < end and proc.poll() is None:
+                nodes_text = mac_ax.text(mac_ax.tree(proc.pid))
+                if 'Library and local AI' in nodes_text:
+                    row['settings_opened'] = True
+                    break
+                time.sleep(.3)
+            (out / 'settings-ax.txt').write_text(nodes_text, encoding='utf-8')
         screen = out / (row['language'] + '-screen.png')
         shot = subprocess.run(['/usr/sbin/screencapture', '-x', str(screen)], capture_output=True, text=True, timeout=20)
         row['screenshot'] = bool(shot.returncode == 0 and screen.exists() and screen.stat().st_size)
@@ -86,4 +97,6 @@ if not report['accessibility_trusted']:
     raise SystemExit('BLOCKED: the hosted session did not grant Accessibility inspection')
 if not all(r['alive'] and r['rendered'] for r in report['launches']):
     raise SystemExit('Packaged app did not render the expected labels')
+if not report['launches'][0].get('settings_opened'):
+    raise SystemExit('Packaged app could not navigate to Settings through Accessibility')
 print('PASS: packaged app rendered English and a seeded Spanish preference in separate launches')

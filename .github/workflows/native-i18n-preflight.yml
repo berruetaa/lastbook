@@ -8,6 +8,7 @@ on:
       - 'app/tests/native_i18n_smoke.py'
       - 'app/tests/prepare_webview2.py'
       - 'app/tests/mac_packaged_probe.py'
+      - 'app/tests/win_packaged_probe.ps1'
       - '.github/scripts/prepare_windows_llm.py'
   workflow_dispatch:
 
