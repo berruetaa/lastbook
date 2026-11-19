@@ -36,10 +36,14 @@ jobs:
         if: runner.os == 'Windows'
         with:
           python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@v7
+        if: runner.os == 'macOS'
+        with:
+          version: '0.13.9'
+          enable-cache: false
       - name: Prepare pinned macOS Python with uv
         if: runner.os == 'macOS'
         run: |
-          if ! command -v uv >/dev/null; then python3 -m pip install uv; fi
           uv venv --seed --python '${{ matrix.python }}' "$RUNNER_TEMP/lastbook-native-venv"
           echo "$RUNNER_TEMP/lastbook-native-venv/bin" >> "$GITHUB_PATH"
       - name: Describe host and user session
