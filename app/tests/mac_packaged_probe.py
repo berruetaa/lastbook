@@ -118,12 +118,20 @@ def run(language, expected):
         print(json.dumps(row, ensure_ascii=False, indent=2), flush=True)
     finally:
         if proc.poll() is None:
-            proc.terminate()
+            root = mac_ax._f['AXUIElementCreateApplication'](proc.pid)
+            windows = mac_ax.attr(root, 'AXWindows') or []
+            close_button = mac_ax.attr(windows[0], 'AXCloseButton') if windows else None
+            row['close_ax_error'] = mac_ax._f['AXUIElementPerformAction'](close_button, 'AXPress') if close_button else 'no close button'
             try:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=5)
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
+        row['graceful_close'] = row.get('close_ax_error') == 0 and proc.returncode == 0
 
 
 try:
@@ -135,6 +143,8 @@ if not report['accessibility_trusted']:
     raise SystemExit('BLOCKED: the hosted session did not grant Accessibility inspection')
 if not all(r['alive'] and r['rendered'] for r in report['launches']):
     raise SystemExit('Packaged app did not render the expected labels')
+if not all(r['graceful_close'] for r in report['launches']):
+    raise SystemExit('Packaged app did not close normally through its native window')
 if not report['launches'][0].get('settings_opened'):
     raise SystemExit('Packaged app could not navigate to Settings through Accessibility')
 if not report['launches'][0].get('spanish_saved_by_ui'):
