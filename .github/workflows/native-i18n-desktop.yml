@@ -75,7 +75,8 @@ jobs:
         if: always() && runner.os == 'Windows' && inputs.build_windows_llm
         run: |
           export TOOLS="$(cygpath -w "$RUNNER_TEMP/lastbook-tools")"
-          python -u -c "import subprocess,sys; p=subprocess.run(['bash','packaging/llm/build_llm_windows.sh'],timeout=1200);sys.exit(p.returncode)" 2>&1 | tee evidence/build-llm-windows.log
+          export GIT_BASH="$(cygpath -w "$(command -v bash)")"
+          python -u -c "import os,subprocess,sys; p=subprocess.run([os.environ['GIT_BASH'],'packaging/llm/build_llm_windows.sh'],timeout=1200);sys.exit(p.returncode)" 2>&1 | tee evidence/build-llm-windows.log
       - name: Attempt official Windows app build
         id: build_windows
         if: always() && runner.os == 'Windows'
