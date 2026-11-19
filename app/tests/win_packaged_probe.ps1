@@ -1,5 +1,5 @@
 # Inspect the built executable through Windows UI Automation. No app hooks,
-# debugging port or security changes. Spanish is seeded for a read/restart test.
+# debugging port or security changes. Spanish is saved through UI Automation.
 param([Parameter(Mandatory=$true)][string]$Exe, [Parameter(Mandatory=$true)][string]$Out)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing
@@ -30,7 +30,6 @@ $report = New-Object System.Collections.ArrayList
 function Probe([string]$Language, [string]$Expected) {
   $pref = Join-Path $Settings 'ui-language.json'
   if ($Language -eq 'default') { if (Test-Path $pref) { Remove-Item $pref } }
-  else { [IO.File]::WriteAllText($pref,'{"language":"es-419"}',$utf8) }
   $p = Start-Process -FilePath $Exe -ArgumentList @('--data', ('"' + $Data + '"')) -PassThru
   $row = [ordered]@{ language=$Language; pid=$p.Id; rendered=$false; expected=$Expected; screenshot=$false }
   [void]$report.Add($row)
@@ -53,6 +52,46 @@ function Probe([string]$Language, [string]$Expected) {
     [IO.File]::WriteAllLines((Join-Path $Out ($Language + '-uia.txt')),[string[]]$names,$utf8)
     $p.Refresh()
     $row.alive = -not $p.HasExited
+    if ($Language -eq 'default' -and $row.rendered) {
+      $settingsLink = @($all | Where-Object { try { $_.Current.Name -eq 'Settings' } catch { $false } }) | Select-Object -First 1
+      if (-not $settingsLink) { throw 'Settings is not exposed through UI Automation' }
+      $settingsLink.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+      $deadline = [DateTime]::UtcNow.AddSeconds(25)
+      do {
+        Start-Sleep -Milliseconds 300
+        $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
+        $names = @($all | ForEach-Object { try { $_.Current.Name } catch {} } | Where-Object { $_ })
+      } while (($names -notcontains 'Library and local AI') -and ([DateTime]::UtcNow -lt $deadline))
+      $row.settings_opened = $names -contains 'Library and local AI'
+      $details = @($all | ForEach-Object { try { $_.Current.ControlType.ProgrammaticName + ' | ' + $_.Current.Name } catch {} })
+      [IO.File]::WriteAllLines((Join-Path $Out 'settings-uia.txt'),[string[]]$details,$utf8)
+      if (-not $row.settings_opened) { throw 'Settings did not open' }
+      $combo = @($all | Where-Object { try { $_.Current.Name -eq 'Interface language' -and $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::ComboBox } catch { $false } }) | Select-Object -First 1
+      if (-not $combo) { throw 'Language combo box is not exposed' }
+      $combo.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+      Start-Sleep -Milliseconds 600
+      $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
+      $details = @($all | ForEach-Object { try { $_.Current.ControlType.ProgrammaticName + ' | ' + $_.Current.Name } catch {} })
+      [IO.File]::WriteAllLines((Join-Path $Out 'language-menu-uia.txt'),[string[]]$details,$utf8)
+      $spanish = 'Espa' + [char]0x00F1 + 'ol (Latinoam' + [char]0x00E9 + 'rica)'
+      $option = @($all | Where-Object { try { $_.Current.Name -eq $spanish } catch { $false } }) | Select-Object -First 1
+      if (-not $option) { throw 'Spanish option is not exposed' }
+      $option.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+      $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
+      $save = @($all | Where-Object { try { $_.Current.Name -eq 'Save language' } catch { $false } }) | Select-Object -First 1
+      if (-not $save) { throw 'Save language is not exposed' }
+      $save.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+      $deadline = [DateTime]::UtcNow.AddSeconds(25)
+      do {
+        Start-Sleep -Milliseconds 300
+        $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
+        $names = @($all | ForEach-Object { try { $_.Current.Name } catch {} } | Where-Object { $_ })
+        $saved = (Test-Path $pref) -and ((Get-Content $pref -Raw | ConvertFrom-Json).language -eq 'es-419')
+      } while ((-not $saved -or $names -notcontains 'Biblioteca e IA local') -and ([DateTime]::UtcNow -lt $deadline))
+      $row.spanish_saved_by_ui = $saved -and ($names -contains 'Biblioteca e IA local')
+      [IO.File]::WriteAllLines((Join-Path $Out 'spanish-settings-uia.txt'),[string[]]$names,$utf8)
+      if (-not $row.spanish_saved_by_ui) { throw 'Spanish was not saved and shown in Settings' }
+    }
     if ($row.alive -and $p.MainWindowHandle -ne [IntPtr]::Zero) {
       try {
         $r = New-Object LastbookCapture+RECT
@@ -85,4 +124,5 @@ try {
 if (@($report | Where-Object { -not $_.alive -or -not $_.rendered }).Count -gt 0) {
   throw 'Packaged app did not expose the expected UI Automation labels.'
 }
-Write-Output 'PASS: packaged executable rendered English and a seeded Spanish preference in separate launches.'
+if (-not $report[0].spanish_saved_by_ui) { throw 'Packaged app did not save Spanish through UI Automation.' }
+Write-Output 'PASS: packaged executable saved Spanish through UI Automation and retained it after restart.'

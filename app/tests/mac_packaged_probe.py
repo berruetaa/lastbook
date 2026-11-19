@@ -2,7 +2,7 @@
 
 This test does not instrument the application or change macOS permissions. It
 fails explicitly if the hosted session cannot expose the app's accessibility
-content. The seeded Spanish preference is a read/restart test, not a GUI save.
+content. It selects and saves Spanish through macOS Accessibility actions.
 """
 import json
 import os
@@ -31,9 +31,7 @@ print('Accessibility trusted:', report['accessibility_trusted'], flush=True)
 
 def run(language, expected):
     pref = settings / 'ui-language.json'
-    if language:
-        pref.write_text(json.dumps({'language': language}), encoding='utf-8')
-    elif pref.exists():
+    if language is None and pref.exists():
         pref.unlink()
     env = {**os.environ, 'HOME': str(home), 'SURVIVAL_DISABLE_INDEX_WATCH': '1'}
     env.pop('LASTBOOK_DATA', None)
@@ -71,6 +69,46 @@ def run(language, expected):
                     break
                 time.sleep(.3)
             (out / 'settings-ax.txt').write_text(nodes_text, encoding='utf-8')
+            if not row.get('settings_opened'):
+                raise AssertionError('Settings did not open')
+            nodes = mac_ax.tree(proc.pid)
+            popup = next((n for n in nodes if n['role'] == 'AXPopUpButton' and 'Interface language' in n['title']), None)
+            if not popup:
+                raise AssertionError('Language popup is not accessible')
+            error = mac_ax._f['AXUIElementPerformAction'](popup['el'], 'AXPress')
+            if error:
+                raise AssertionError(f'Could not open language popup: AX error {error}')
+            end = time.monotonic() + 10
+            option = None
+            while time.monotonic() < end:
+                root = mac_ax._f['AXUIElementCreateApplication'](proc.pid)
+                menu = mac_ax.walk(root)
+                (out / 'language-menu-ax.txt').write_text(mac_ax.text(menu), encoding='utf-8')
+                option = next((n for n in menu if n['role'] == 'AXMenuItem' and
+                               'Español (Latinoamérica)' in ' '.join((n['title'], n['value'], n['desc']))), None)
+                if option:
+                    break
+                time.sleep(.2)
+            if not option:
+                raise AssertionError('Spanish choice not exposed in the language menu')
+            error = mac_ax._f['AXUIElementPerformAction'](option['el'], 'AXPress')
+            if error:
+                raise AssertionError(f'Could not choose Spanish: AX error {error}')
+            time.sleep(.5)
+            row['save_press'] = mac_ax.press(mac_ax.tree(proc.pid), 'Save language')
+            if not row['save_press'] or row['save_press']['err']:
+                raise AssertionError(f"Could not press Save language: {row['save_press']}")
+            end = time.monotonic() + 25
+            while time.monotonic() < end:
+                nodes_text = mac_ax.text(mac_ax.tree(proc.pid))
+                if 'Biblioteca e IA local' in nodes_text and pref.exists():
+                    if json.loads(pref.read_text(encoding='utf-8')) == {'language': 'es-419'}:
+                        row['spanish_saved_by_ui'] = True
+                        break
+                time.sleep(.3)
+            (out / 'spanish-settings-ax.txt').write_text(nodes_text, encoding='utf-8')
+            if not row.get('spanish_saved_by_ui'):
+                raise AssertionError('The UI did not save Spanish and translate Settings')
         screen = out / (row['language'] + '-screen.png')
         shot = subprocess.run(['/usr/sbin/screencapture', '-x', str(screen)], capture_output=True, text=True, timeout=20)
         row['screenshot'] = bool(shot.returncode == 0 and screen.exists() and screen.stat().st_size)
@@ -99,4 +137,6 @@ if not all(r['alive'] and r['rendered'] for r in report['launches']):
     raise SystemExit('Packaged app did not render the expected labels')
 if not report['launches'][0].get('settings_opened'):
     raise SystemExit('Packaged app could not navigate to Settings through Accessibility')
-print('PASS: packaged app rendered English and a seeded Spanish preference in separate launches')
+if not report['launches'][0].get('spanish_saved_by_ui'):
+    raise SystemExit('Packaged app did not save Spanish through native UI controls')
+print('PASS: packaged app saved Spanish through Accessibility and retained it after restart')
