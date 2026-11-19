@@ -23,7 +23,10 @@ def emit(message):
 
 
 def child(phase, work, staged):
+    import faulthandler
     import threading
+    faulthandler.enable(all_threads=True)
+    faulthandler.dump_traceback_later(40, repeat=True)
     sys.path[:0] = [str(ROOT / 'app'), str(ROOT)]
     os.environ.pop('LASTBOOK_DATA', None)
     os.environ['SURVIVAL_DISABLE_INDEX_WATCH'] = '1'
@@ -52,6 +55,7 @@ def child(phase, work, staged):
         def on_ready(instance, sender, args):
             original(instance, sender, args)
             if args.IsSuccess:
+                emit('Native engine: WebView2 ' + str(instance.env.BrowserVersionString))
                 shell_ref.append(instance)
                 ready.set()
         shell.Shell.on_ready = on_ready
@@ -107,6 +111,7 @@ def child(phase, work, staged):
         original = shell.Shell.build
         def build(instance):
             original(instance)
+            emit('Native engine: ' + str(instance.view.className()))
             shell_ref.append(instance)
             ready.set()
         shell.Shell.build = build
@@ -164,12 +169,10 @@ def child(phase, work, staged):
     def run_checks():
         result = {'phase': phase, 'passed': False, 'platform': sys.platform}
         try:
+            emit('Waiting for native WebView initialization')
             if not ready.wait(90):
                 raise TimeoutError('native WebView did not initialize')
-            if sys.platform == 'win32':
-                emit('Native engine: WebView2 ' + str(instance().env.BrowserVersionString))
-            else:
-                emit('Native engine: ' + str(instance().view.className()))
+            emit('Native WebView initialized; waiting for page')
             if phase in ('setup', 'restart'):
                 wait("!!document.querySelector('#languageSettings:not([hidden])')", True, 'language preference loaded')
                 if phase == 'setup':
@@ -228,7 +231,7 @@ def parent(out):
         log = out / (phase + '.log')
         with log.open('w', encoding='utf-8') as f:
             try:
-                p = subprocess.run([sys.executable, '-u', '-B', __file__, '--child', phase, str(work), str(staged)], stdout=f, stderr=subprocess.STDOUT, timeout=180)
+                p = subprocess.run([sys.executable, '-u', '-B', __file__, '--child', phase, str(work), str(staged)], stdout=f, stderr=subprocess.STDOUT, timeout=125)
                 code = p.returncode
             except subprocess.TimeoutExpired:
                 code = 'timeout'

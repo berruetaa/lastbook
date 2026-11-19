@@ -1,13 +1,13 @@
 name: Native i18n desktop evidence
 
 on:
-  push:
-    branches: [ci/native-i18n-validation]
-    paths:
-      - '.github/workflows/native-i18n-desktop.yml'
-      - 'app/tests/native_i18n_smoke.py'
-      - 'app/tests/prepare_webview2.py'
   workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Platform to validate'
+        type: choice
+        options: [both, windows, macos]
+        default: both
 
 permissions:
   contents: read
@@ -20,13 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-2025
-            python: '3.14.10'
-            requirements: packaging/requirements_app.txt
-          - os: macos-15
-            python: '3.11.18'
-            requirements: packaging/requirements_macos.txt
+        include: ${{ fromJSON(inputs.platform == 'windows' && '[{"os":"windows-2025","python":"3.14.10","requirements":"packaging/requirements_app.txt"}]' || inputs.platform == 'macos' && '[{"os":"macos-15","python":"3.11.18","requirements":"packaging/requirements_macos.txt"}]' || '[{"os":"windows-2025","python":"3.14.10","requirements":"packaging/requirements_app.txt"},{"os":"macos-15","python":"3.11.18","requirements":"packaging/requirements_macos.txt"}]') }}
     defaults:
       run:
         shell: bash
